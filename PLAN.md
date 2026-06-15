@@ -102,7 +102,7 @@ Backend (FastAPI/Python)
 ## Directory structure
 
 ```
-universal_agent_ui/
+universal-agent-ui/
   frontend/
     app/
       api/copilotkit/route.ts      # CopilotKit Runtime
