@@ -13,7 +13,7 @@ This repo inherits the instructions in `~/.claude/CLAUDE.md`. That file takes pr
 Use the following layout unless a task explicitly overrides it:
 
 ```
-universal_ui/
+universal_agent_ui/
   frontend/       # Next.js / React app (UI)
   backend/        # Python service (agent orchestration, API)
   packages/       # Shared TypeScript/Python packages (if monorepo)

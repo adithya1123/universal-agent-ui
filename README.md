@@ -172,7 +172,7 @@ databricks experiments create-experiment /Users/$USER/universal-agent-ui
 ## Project structure
 
 ```
-universal_ui/
+universal_agent_ui/
   frontend/          # Next.js + CopilotKit
     src/
       app/
