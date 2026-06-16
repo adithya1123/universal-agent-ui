@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark, .dark *));
+
+/* DuBois Design Tokens (light) */
+:root {
+  --color-blue-300: #bae1fc;
+  --color-blue-400: #4ba3d6;
+  --color-blue-500: #2e86c1;
+  --color-blue-600: #2272b4;
+  --color-blue-700: #0e538b;
+  --color-blue-800: #04355d;
+
+  --color-grey-050: #f6f7f9;
+  --color-grey-100: #e8ecf0;
+  --color-grey-200: #d1dce5;
+  --color-grey-300: #bdcdd9;
+  --color-grey-400: #8d9fad;
+  --color-grey-500: #5f7281;
+  --color-grey-600: #44535f;
+  --color-grey-700: #1f272d;
+  --color-grey-800: #11171c;
+
+  --color-neutral-050: #f7f7f7;
+  --color-neutral-100: #ebebeb;
+  --color-neutral-200: #d8d8d8;
+  --color-neutral-300: #cbcbcb;
+  --color-neutral-350: #a2a2a2;
+  --color-neutral-400: #939393;
+  --color-neutral-500: #6f6f6f;
+  --color-neutral-600: #525252;
+  --color-neutral-700: #262626;
+  --color-neutral-800: #161616;
+
+  --color-red-400: #f06e87;
+  --color-red-500: #e83a5f;
+  --color-red-600: #c82d4c;
+
+  --color-green-400: #59c47a;
+  --color-green-500: #3ca45e;
+
+  --dubois-shadow-db-xs: 0px 1px 0px 0px rgba(0,0,0,0.05);
+  --dubois-shadow-db-sm: 0px 2px 3px -1px rgba(0,0,0,0.05), 0px 1px 0px 0px rgba(0,0,0,0.02);
+  --dubois-shadow-db-md: 0px 3px 6px 0px rgba(0,0,0,0.05);
+  --dubois-shadow-db-lg: 0px 2px 16px 0px rgba(0,0,0,0.08);
+
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-base: 0.8125rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+
+  --font-standard: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, Noto Sans, sans-serif;
+  --font-standard-mono: Menlo, Monaco, Consolas, "Ubuntu Mono", "Source Code Pro", monospace;
+
+  --background: #ffffff;
+  --foreground: var(--color-grey-800);
+  --card: #ffffff;
+  --primary: var(--color-blue-600);
+  --primary-foreground: #ffffff;
+  --secondary: var(--color-grey-050);
+  --secondary-foreground: var(--color-grey-800);
+  --muted: var(--color-grey-050);
+  --muted-foreground: var(--color-neutral-600);
+  --accent: var(--color-grey-050);
+  --accent-foreground: var(--color-grey-800);
+  --destructive: var(--color-red-600);
+  --border: var(--color-grey-100);
+  --input: var(--color-grey-100);
+  --ring: #2272b4;
+
+  --sidebar-background: var(--color-neutral-050);
+  --sidebar-foreground: var(--color-grey-800);
+  --sidebar-accent: var(--color-grey-100);
+  --sidebar-accent-foreground: var(--color-grey-800);
+  --sidebar-border: var(--color-grey-100);
+  --sidebar-ring: var(--color-blue-600);
+
+  --radius: 0.25rem;
+}
+
+.dark {
+  --background: var(--color-grey-800);
+  --foreground: var(--color-grey-100);
+  --card: #1a2530;
+  --primary: var(--color-blue-500);
+  --primary-foreground: #ffffff;
+  --secondary: #283035;
+  --secondary-foreground: #e8ecf0;
+  --muted: #2a3a45;
+  --muted-foreground: #bdcdd9;
+  --accent: #2a3a45;
+  --accent-foreground: #e8ecf0;
+  --destructive: #e65677;
+  --border: #2a3a45;
+  --input: #2a3a45;
+  --ring: #4ba3d6;
+
+  --sidebar-background: var(--color-grey-700);
+  --sidebar-foreground: #e8ecf0;
+  --sidebar-accent: #2a3a45;
+  --sidebar-accent-foreground: #e8ecf0;
+  --sidebar-border: #2a3a45;
+  --sidebar-ring: #4ba3d6;
+}
+
+@theme {
+  --font-sans: var(--font-standard);
+  --font-mono: var(--font-standard-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar-background);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --animate-shimmer-text: shimmer-text 1.5s linear infinite;
+}
+
+@layer base {
+  *, ::after, ::before, ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-standard), sans-serif;
+    font-size: 13px;
+    line-height: 20px;
+    overflow-x: hidden;
+  }
+}
+
+@layer utilities {
+  .bg-ai-gradient {
+    background: linear-gradient(135deg, #4299e0 20.5%, #ca42e0 46.91%, #ff5f46 79.5%);
+  }
+  .text-ai-gradient {
+    background: linear-gradient(135deg, #4299e0 20.5%, #ca42e0 46.91%, #ff5f46 79.5%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+@keyframes shimmer-text {
+  0% { background-position: 100% 50%; }
+  100% { background-position: -100% 50%; }
+}
