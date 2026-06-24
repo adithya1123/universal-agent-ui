@@ -1,7 +1,5 @@
 "use client";
 
-import { cn } from "@/lib/utils";
-
 interface MessageProps {
   role: "user" | "assistant";
   content: string;

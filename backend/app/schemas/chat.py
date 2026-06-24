@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     messages: list[Message]
     thread_id: str | None = None
     agent_id: str
+    user_id: str | None = None
     stream: bool = True
 
 

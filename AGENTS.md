@@ -1,55 +1,68 @@
-# Universal Agent UI — AGENTS.md
+# Universal Agent UI
 
-## Project
+Frontend (Next.js + CopilotKit) + Backend (FastAPI) for interacting with Databricks Mosaic AI supervisor agents via the LangGraph supervisor client.
 
-Universal frontend + backend for interacting with AI agents. New project — structure is still being established.
+## Quick start
 
-## Global rules
+```bash
+# Terminal 1 — Backend
+cd backend && uv run uvicorn app.main:app --reload --port 8000
 
-This repo inherits the instructions in `~/.claude/CLAUDE.md`. That file takes precedence for code accuracy, documentation lookup, and verification requirements. Always read it first in a session.
-
-## Projected structure
-
-Use the following layout unless a task explicitly overrides it:
-
-```
-universal-agent-ui/
-  frontend/       # Next.js / React app (UI)
-  backend/        # Python service (agent orchestration, API)
-  packages/       # Shared TypeScript/Python packages (if monorepo)
+# Terminal 2 — Frontend
+cd frontend && pnpm dev
 ```
 
-- `frontend/` — own `package.json`, Next.js config, tailwind, etc.
-- `backend/` — own `pyproject.toml` or `requirements.txt`, FastAPI preferred
-- Keep root `package.json` only for workspace orchestration, never app code
-- Do not put source code at the root level
+## Modules
 
-## Tech stack conventions (decide on first use, then pin here)
+| Module | Description |
+|---|---|
+| `backend/app/supervisor/` | LangGraph supervisor client (copied from `langgraph_supervisor`) — dual-store Lakebase persistence |
+| `backend/app/services/` | SupervisorService — pool of `AsyncLangGraphSupervisor` clients, one per agent endpoint |
+| `backend/app/routers/` | FastAPI routes: agent CRUD, AG-UI SSE streaming, session management |
+| `backend/app/schemas/` | Pydantic models for agents, chat, sessions |
+| `backend/app/db/` | SQLAlchemy async engine + SQLite agent registry |
+| `frontend/src/components/` | React components: Chat, Sidebar, Messages, MultimodalInput |
+| `frontend/src/app/api/copilotkit/` | CopilotKit Runtime — proxies to FastAPI `/ag-ui/run` |
 
-- **Frontend**: Next.js (App Router), TypeScript, Tailwind CSS
-- **Backend**: Python, FastAPI
-- **State/API client**: tRPC or plain fetch (decide at first endpoint)
-- **Package manager**: pnpm (frontend), uv or pip (backend)
-- **Agent SDK**: LangChain / LangGraph (likely, based on sibling projects)
-- **Auth**: Databricks auth module (`backend/app/auth.py`) — service principal OAuth (client credentials via `/oidc/v1/token`), PAT fallback, CLI fallback. Auto-detected by `detect_auth_method()`. Tokens cached with automatic refresh.
+## Architecture
 
-## Developer workflow
+```
+CopilotKit Runtime (single-route) → POST /ag-ui/run → SupervisorService (client pool)
+                                                        → AsyncLangGraphSupervisor (per endpoint)
+                                                            ├── _sse_stream() → direct httpx SSE to /invocations
+                                                            └── Databricks Lakebase (dual-store)
+                                                                ├── checkpoints (unreliable — not used for reads)
+                                                                └── store (threads, by_user, messages_history)
+```
 
-- `pnpm dev` — start frontend dev server (in `frontend/`)
-- `uv run uvicorn app.main:app --reload` — start backend (in `backend/`)
-- `pnpm lint` / `pnpm typecheck` — run before committing frontend changes
-- `ruff check backend/ && mypy backend/` — run before committing backend changes
-- Always lint + typecheck + test before opening a PR
+## Notable fixes during setup
 
-## Testing
+| Issue | Cause | Fix |
+|---|---|---|
+| `databricks-openai` Responses API empty stream | `responses.create()` routes to `{base_url}/v1/responses` not `/invocations` | `_sse_stream()` — direct `httpx` SSE to serving endpoint |
+| `forwardedProps` always undefined | Destructured from factory param instead of `input.forwardedProps` | `input.forwardedProps` |
+| CopilotKit 404 on runtime info | Missing `GET` export + wrong route mode | Single-route mode with `basePath` + `useSingleEndpoint` |
+| `type "vector" does not exist` | Lakebase PG missing `pgvector` extension | Omitted `embedding_endpoint` from `AsyncDatabricksStore` |
+| PG password auth failed | SP had no Lakebase role on the branch | Created role with `LAKEBASE_OAUTH_V1` + `SERVICE_PRINCIPAL` |
+| Thread tracking broken | `create_session()` skipped when `thread_id` provided | Always call `create_session()` with `thread_id` |
+| AI messages not persisted | `break` on `completed` killed generator before wrapper persist | Changed `break` to `pass` |
+| Checkpoint data lost between turns | `user_id` in persist config created separate scope; PG pool tear-down lost transactions | Removed `user_id` from config; bypassed checkpoints — message history via DatabricksStore |
+| Thread_id changes each turn | CopilotKit generates new `input.threadId` per run | `agent.setState({ threadId })` synchronized to `input.state.threadId` |
+| New Chat doesn't create new thread | CopilotKit caches `forwardedProps` from `useAgent()` | Use `agent.setState()` (not `forwardedProps`) for thread_id |
+| CopilotKit strips `threadId` from forwardedProps | Reserved key conflict | Use `input.state.threadId` via `agent.setState()` |
+| New Chat shows old messages | CopilotKit provider persists across remounts; `agent.messages` never cleared | `agent.setMessages([])` on new chat |
+| Delete thread was a no-op | `supervisor_service.delete_thread()` only logged | `AsyncDatabricksStore.adelete()` + `AsyncCheckpointSaver.adelete_thread()` across all 5 store namespaces |
+| Frontend delete didn't call API | `handleDeleteSession` only removed local state | `apiDelete()` to `DELETE /api/sessions/{thread_id}` |
 
-- Frontend: Vitest + React Testing Library
-- Backend: pytest
-- Integration tests: use a shared compose file or test harness
+## Delete thread — data cleaned from Lakebase
 
-## Key constraints
+| Store | Namespace | Key |
+|-------|-----------|-----|
+| DatabricksStore | `("threads",)` | `thread_id` (metadata) |
+| DatabricksStore | `("threads",)` | `f"{thread_id}/messages"` (history) |
+| DatabricksStore | `("by_user", <user_id>)` | `thread_id` (index) |
+| DatabricksStore | `("by_correlation", <corr_id>)` | `thread_id` (index) |
+| DatabricksStore | `("messages", <thread_id>)` | each `message_id` (per-turn tracking) |
+| CheckpointSaver | thread-scoped | `adelete_thread(thread_id)` (state) |
 
-- Never commit secrets, `.env` files, or API keys
-- Use `AGENTS.md` as a living document — update it when you establish a new convention
-- If a sibling project (e.g., `crawl-prod-agent`, `foundry_agent`) has relevant patterns, reference them rather than re-deriving
-- Generated code and schema changes must be committed separately from logic changes
+_Last updated: 2026-06-24_

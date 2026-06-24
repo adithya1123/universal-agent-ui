@@ -1,9 +1,24 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import agents, ag_ui
+from app.db.engine import close_engine
+from app.db.models import init_schema
+from app.routers import agents, ag_ui, sessions
+from app.services.supervisor_service import supervisor_service
 
-app = FastAPI(title="Universal Agent UI Backend", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_schema()
+    await supervisor_service.start()
+    yield
+    await supervisor_service.stop()
+    await close_engine()
+
+
+app = FastAPI(title="Universal Agent UI Backend", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(agents.router, prefix="/api")
+app.include_router(sessions.router, prefix="/api")
 app.include_router(ag_ui.router, prefix="")
 
 

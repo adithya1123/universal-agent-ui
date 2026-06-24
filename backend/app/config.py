@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     lakebase_autoscaling_branch: str = ""
     lakebase_url: str = ""
 
+    result_volume_path: str = ""
+
+    embedding_endpoint: str = ""
+    embedding_dims: int = 0
+
+    max_history: int = 10
+    supervisor_timeout: int = 300
+
     mlflow_experiment_id: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

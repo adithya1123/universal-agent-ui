@@ -8,3 +8,7 @@ __pycache__/
 .DS_Store
 *.egg-info/
 dist/
+.ruff_cache/
+.env.local
+*.db
+AGENTS/

@@ -102,10 +102,14 @@ async def get_pat_token() -> str:
     if _pat_token and time.monotonic() < _pat_token_expires_at:
         return _pat_token
 
-    _pat_token = settings.databricks_token
-    _pat_token_expires_at = time.monotonic() + 3600
+    async with _token_lock:
+        if _pat_token and time.monotonic() < _pat_token_expires_at:
+            return _pat_token
 
-    return _pat_token
+        _pat_token = settings.databricks_token
+        _pat_token_expires_at = time.monotonic() + 3600
+
+        return _pat_token
 
 
 async def get_cli_token() -> str:
@@ -114,39 +118,43 @@ async def get_cli_token() -> str:
     if _cli_token and time.monotonic() < _cli_token_expires_at:
         return _cli_token
 
-    args = ["databricks", "auth", "token", "--output", "json"]
-    profile = settings.databricks_config_profile
-    if profile:
-        args.extend(["--profile", profile])
-    if settings.databricks_host:
-        host = settings.databricks_host.replace("https://", "").replace("http://", "").rstrip("/")
-        args.extend(["--host", host])
+    async with _token_lock:
+        if _cli_token and time.monotonic() < _cli_token_expires_at:
+            return _cli_token
 
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
+        args = ["databricks", "auth", "token", "--output", "json"]
+        profile = settings.databricks_config_profile
+        if profile:
+            args.extend(["--profile", profile])
+        if settings.databricks_host:
+            host = settings.databricks_host.replace("https://", "").replace("http://", "").rstrip("/")
+            args.extend(["--host", host])
 
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Databricks CLI auth token failed: {stderr.decode().strip()}"
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        stdout, stderr = await proc.communicate()
 
-    stdout_str = stdout.decode()
-    try:
-        data = json.loads(stdout_str)
-    except json.JSONDecodeError:
-        raise RuntimeError(
-            f"Databricks CLI returned invalid JSON: {stdout_str.strip()}"
-        )
-    _cli_token = data["access_token"]
-    expires_in = data.get("expires_in", 3600)
-    buffer = min(300, expires_in // 6)
-    _cli_token_expires_at = time.monotonic() + (expires_in - buffer)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Databricks CLI auth token failed: {stderr.decode().strip()}"
+            )
 
-    return _cli_token
+        stdout_str = stdout.decode()
+        try:
+            data = json.loads(stdout_str)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"Databricks CLI returned invalid JSON: {stdout_str.strip()}"
+            )
+        _cli_token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        buffer = min(300, expires_in // 6)
+        _cli_token_expires_at = time.monotonic() + (expires_in - buffer)
+
+        return _cli_token
 
 
 async def get_databricks_token() -> str:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTheme } from "next-themes";
 import {
   MessageSquarePlus,
@@ -37,6 +37,8 @@ export function Sidebar({
 }) {
   const { theme, setTheme } = useTheme();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   return (
     <div
@@ -129,7 +131,7 @@ export function Sidebar({
             collapsed && "justify-center px-0",
           )}
         >
-          {theme === "dark" ? (
+          {mounted && theme === "dark" ? (
             <Sun className="size-4 shrink-0" />
           ) : (
             <Moon className="size-4 shrink-0" />

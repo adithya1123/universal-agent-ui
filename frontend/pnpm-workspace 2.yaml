@@ -1,7 +1,0 @@
-allowBuilds:
-  '@scarf/scarf': set this to true or false
-  sharp: true
-  unrs-resolver: true
-ignoredBuiltDependencies:
-  - sharp
-  - unrs-resolver
