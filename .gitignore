@@ -11,4 +11,3 @@ dist/
 .ruff_cache/
 .env.local
 *.db
-AGENTS/
