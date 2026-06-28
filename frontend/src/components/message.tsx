@@ -1,12 +1,79 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 interface MessageProps {
   role: "user" | "assistant";
   content: string;
   isLoading?: boolean;
+}
+
+type ContentBlock =
+  | { type: "text"; content: string }
+  | { type: "plotly"; spec: Record<string, unknown> }
+  | { type: "plotly-loading" };
+
+const PLOTLY_BLOCK_RE = /```plotly\n([\s\S]*?)```/g;
+
+function parseContent(content: string): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = PLOTLY_BLOCK_RE.exec(content)) !== null) {
+    if (match.index > lastIdx) {
+      blocks.push({ type: "text", content: content.slice(lastIdx, match.index) });
+    }
+    try {
+      const spec = JSON.parse(match[1]);
+      blocks.push({ type: "plotly", spec });
+    } catch {
+      blocks.push({ type: "text", content: match[0] });
+    }
+    lastIdx = match.index + match[0].length;
+  }
+
+  const remainder = content.slice(lastIdx);
+  if (remainder) {
+    const unclosed = remainder.match(/```plotly\n([\s\S]*)$/);
+    if (unclosed && unclosed.index !== undefined) {
+      if (unclosed.index > 0) {
+        blocks.push({ type: "text", content: remainder.slice(0, unclosed.index) });
+      }
+      blocks.push({ type: "plotly-loading" });
+    } else {
+      blocks.push({ type: "text", content: remainder });
+    }
+  }
+
+  return blocks;
+}
+
+function PlotlyChart({ spec }: { spec: Record<string, unknown> }) {
+  const plotly = (spec.plotly_spec as Record<string, unknown> | undefined) ?? spec;
+  const data = plotly.data as unknown[] | undefined;
+  const layout = (plotly.layout as Record<string, unknown> | undefined) ?? {};
+  const config = (plotly.config as Record<string, unknown> | undefined) ?? {};
+
+  if (!data || !Array.isArray(data) || data.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="my-4 overflow-x-auto">
+      <Plot
+        data={data}
+        layout={{ ...layout, autosize: true }}
+        config={{ ...config, responsive: true, displaylogo: false }}
+        style={{ width: "100%", height: 400 }}
+        useResizeHandler
+      />
+    </div>
+  );
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -77,11 +144,28 @@ export function Message({ role, content, isLoading }: MessageProps) {
         {isLoading && !content ? (
           <span className="inline-block bg-ai-gradient rounded-md w-24 h-4 animate-shimmer-text bg-[length:200%_100%]" />
         ) : (
-          <MarkdownContent content={content} />
+          <MessageContent content={content} />
         )}
       </div>
     </div>
   );
+}
+
+function MessageContent({ content }: { content: string }) {
+  const blocks = parseContent(content);
+  return blocks.map((block, i) => {
+    if (block.type === "text") {
+      return <MarkdownContent key={i} content={block.content} />;
+    }
+    if (block.type === "plotly") {
+      return <PlotlyChart key={i} spec={block.spec} />;
+    }
+    return (
+      <div key={i} className="my-4 p-4 border rounded-md animate-pulse bg-muted">
+        <div className="h-64 bg-muted-foreground/10 rounded" />
+      </div>
+    );
+  });
 }
 
 export function AwaitingResponse() {

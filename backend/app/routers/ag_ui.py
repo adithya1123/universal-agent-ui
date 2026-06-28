@@ -10,6 +10,7 @@ Returns a text/event-stream with JSON SSE events:
     {"type": "text", "content": "..."}      — text delta from the agent
     {"type": "routing", "agent": "..."}     — supervisor dispatching to a sub-agent
     {"type": "reasoning", "content": "..."} — intermediate thinking/reasoning
+    {"type": "plotly_spec", "spec": {...}} — Plotly figure JSON spec from viz sub-agent
     data: [DONE]                            — stream complete
 """
 
@@ -55,6 +56,7 @@ async def _stream_agent_response(
     )
 
     async for event in stream:
+        logger.debug("STREAM_EVENT: type=%s item_type=%s text_len=%s text_truncated=%s", event.type, getattr(event, 'item_type', ''), len(event.text) if event.text else 0, event.text[:150] if event.text else '')
         if event.type == "text_delta":
             payload = json.dumps({"type": "text", "content": event.text})
             yield f"data: {payload}\n\n".encode()
@@ -63,6 +65,12 @@ async def _stream_agent_response(
             yield f"data: {payload}\n\n".encode()
         elif event.type == "reasoning":
             payload = json.dumps({"type": "reasoning", "content": event.text})
+            yield f"data: {payload}\n\n".encode()
+        elif event.type == "item_done":
+            payload = json.dumps({"type": "item_done", "item_type": event.item_type, "content": event.text[:500]})
+            yield f"data: {payload}\n\n".encode()
+        elif event.type == "plotly_spec":
+            payload = json.dumps({"type": "plotly_spec", "spec": json.loads(event.text)})
             yield f"data: {payload}\n\n".encode()
         elif event.type == "completed":
             pass

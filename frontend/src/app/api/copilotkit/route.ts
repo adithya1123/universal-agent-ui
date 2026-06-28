@@ -92,6 +92,13 @@ const agent = new BuiltInAgent({
               messageId,
               delta: `[REASONING]${event.content}`,
             } as BaseEvent;
+          } else if (event.type === "plotly_spec" && event.spec) {
+            yield {
+              type: EventType.TEXT_MESSAGE_CHUNK,
+              role: "assistant",
+              messageId,
+              delta: `\n\n\`\`\`plotly\n${JSON.stringify(event.spec)}\n\`\`\`\n\n`,
+            } as BaseEvent;
           }
         } catch {
           // skip malformed JSON

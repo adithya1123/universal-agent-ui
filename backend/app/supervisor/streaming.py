@@ -8,8 +8,10 @@ Contains:
 
 from __future__ import annotations
 
+import json
 import logging
 import mlflow
+import re
 import time
 import traceback
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Set
@@ -67,6 +69,25 @@ logger = logging.getLogger(__name__)
 
 _StreamFactory = Callable[[List[Dict[str, Any]]], Awaitable[Any]]
 
+
+def _extract_plotly_spec(text: str) -> Optional[dict]:
+    """Walk a string for the first JSON payload containing a plotly_spec key."""
+    if not text or "plotly_spec" not in text:
+        return None
+    try:
+        parsed = json.loads(text)
+        if "plotly_spec" in parsed:
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+    for m in re.finditer(r"\{", text):
+        try:
+            parsed = json.loads(text[m.start():])
+            if "plotly_spec" in parsed:
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
 
 def _item_get(item: Any, key: str, default: Any = None) -> Any:
     """Read an attribute from either an SDK object or a plain dict."""
@@ -172,12 +193,14 @@ class AsyncStreamingResponse:
         final_answer = ""
         raw_events: Optional[List[Dict[str, Any]]] = [] if self._store_raw else None
         message_texts: List[str] = []
+        plotly_blocks: List[str] = []
 
         _db_output_checked = False
 
         try:
             async for event in self._stream:
                 event_type = getattr(event, "type", "")
+                logger.debug("RAW EVENT: type=%s", event_type)
 
                 if event_type == "response.output_text.delta":
                     delta = getattr(event, "delta", "")
@@ -219,6 +242,22 @@ class AsyncStreamingResponse:
                                 item_type="function_call_output",
                                 text=_trunc(output, 200),
                             )
+                            for candidate_text in [output] + [
+                                (isinstance(b, dict) and (b.get("text") or b.get("output") or ""))
+                                or (hasattr(b, "text") and getattr(b, "text", ""))
+                                or (hasattr(b, "output") and getattr(b, "output", ""))
+                                or ""
+                                for b in (_item_get(item, "content") or [])
+                            ]:
+                                pspec = _extract_plotly_spec(candidate_text)
+                                if pspec:
+                                    plotly_blocks.append(
+                                        f"\n\n```plotly\n{json.dumps(pspec)}\n```\n\n"
+                                    )
+                                    yield StreamEvent(
+                                        type="plotly_spec",
+                                        text=json.dumps(pspec),
+                                    )
                         elif itype == "message":
                             text = _extract_text_from_item(item)
                             if text:
@@ -234,6 +273,22 @@ class AsyncStreamingResponse:
                                 item_type="message",
                                 text=_trunc(text or "", 200),
                             )
+                            for candidate_text in [text or ""] + [
+                                (isinstance(b, dict) and (b.get("text") or b.get("output") or ""))
+                                or (hasattr(b, "text") and getattr(b, "text", ""))
+                                or (hasattr(b, "output") and getattr(b, "output", ""))
+                                or ""
+                                for b in (_item_get(item, "content") or [])
+                            ]:
+                                pspec = _extract_plotly_spec(candidate_text)
+                                if pspec:
+                                    plotly_blocks.append(
+                                        f"\n\n```plotly\n{json.dumps(pspec)}\n```\n\n"
+                                    )
+                                    yield StreamEvent(
+                                        type="plotly_spec",
+                                        text=json.dumps(pspec),
+                                    )
                         elif itype == "mcp_approval_request":
                             request = {
                                 "id": _item_get(item, "id"),
@@ -309,6 +364,8 @@ class AsyncStreamingResponse:
             errors.append(str(e)[:_Limits.ERROR_BODY])
             logger.error("Async stream error: %s", e)
         latency = time.time() - self._start_time
+        if plotly_blocks:
+            final_answer += "".join(plotly_blocks)
         self._result = AgentResult(
             question=self._question,
             status_code=200 if not errors else 500,

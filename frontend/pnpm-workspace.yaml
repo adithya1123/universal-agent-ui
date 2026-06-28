@@ -1,5 +1,6 @@
 allowBuilds:
   '@scarf/scarf': set this to true or false
+  es5-ext: true
   sharp: true
   unrs-resolver: true
 ignoredBuiltDependencies:
