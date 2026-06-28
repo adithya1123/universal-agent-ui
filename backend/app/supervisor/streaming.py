@@ -14,6 +14,7 @@ import mlflow
 import re
 import time
 import traceback
+from datetime import datetime, timezone, timedelta
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Set
 
 try:
@@ -669,28 +670,39 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
         # -- Memory extraction (auto-detect storable facts from conversation) --
         if self._memory_extractor and self._user_id and self._user_memory_service:
             try:
-                recent = [
-                    {"role": "user" if isinstance(m, HumanMessage) else "assistant",
-                     "content": getattr(m, "content", "") or ""}
-                    for m in self._messages[-6:]
-                ]
-                existing = await self._user_memory_service.list_memories(self._user_id)
-                existing_keys = [m["key"] for m in existing]
-                new_facts = await self._memory_extractor.extract_from_turn(
-                    recent, existing_keys=existing_keys,
-                )
-                saved = 0
-                for fact in new_facts:
-                    ok = await self._user_memory_service.save_memory(
-                        self._user_id, fact["key"], fact["data"],
+                from app.config import settings
+
+                # Gate 1: skip if assistant response is too short (routing-only turns)
+                assistant_len = 0
+                for m in reversed(self._messages):
+                    if not isinstance(m, HumanMessage):
+                        assistant_len = len(getattr(m, "content", "") or "")
+                        break
+                if 0 < assistant_len < settings.memory_extraction_min_message_length:
+                    logger.debug(
+                        "Skipping memory extraction: short response (%d chars)",
+                        assistant_len,
                     )
-                    if ok:
-                        saved += 1
-                if saved:
-                    logger.info(
-                        "Extracted and saved %d new memories for user=%s",
-                        saved, self._user_id,
-                    )
+                else:
+                    # Gate 2: rate-limit via cooldown
+                    cooldown_key = "_system_extraction_cooldown"
+                    last = await self._user_memory_service.get_memory(self._user_id, cooldown_key)
+                    last_ts = (last or {}).get("value", "")
+                    cooldown_active = False
+                    if last_ts:
+                        try:
+                            delta = datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)
+                            if delta < timedelta(minutes=settings.memory_extraction_cooldown_minutes):
+                                cooldown_active = True
+                        except (ValueError, TypeError):
+                            pass  # broken timestamp → proceed
+
+                    if cooldown_active:
+                        logger.debug(
+                            "Skipping memory extraction: within cooldown",
+                        )
+                    else:
+                        await self._do_memory_extraction(settings)
             except PermissionError:
                 logger.warning(
                     "Memory extraction disabled: App Service Principal lacks "
@@ -720,6 +732,43 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
                         await __import__("asyncio").sleep(1)
                     else:
                         logger.warning("Failed to set trace tags for %s: %s", self._trace_id, traceback.format_exc())
+
+    async def _do_memory_extraction(self, settings) -> None:
+        cooldown_key = "_system_extraction_cooldown"
+        await self._user_memory_service.save_memory(
+            self._user_id, cooldown_key,
+            {"value": datetime.now(timezone.utc).isoformat(), "category": "system"},
+        )
+
+        recent = [
+            {"role": "user" if isinstance(m, HumanMessage) else "assistant",
+             "content": getattr(m, "content", "") or ""}
+            for m in self._messages[-settings.memory_extraction_window:]
+        ]
+        existing_keys = await self._user_memory_service.list_keys(self._user_id)
+        new_facts = await self._memory_extractor.extract_from_turn(
+            recent, existing_keys=existing_keys,
+        )
+        saved = 0
+        for fact in new_facts:
+            ok = await self._user_memory_service.save_memory(
+                self._user_id, fact["key"], fact,
+            )
+            if ok:
+                saved += 1
+
+        if saved > 0:
+            await self._user_memory_service._evict_stale(
+                self._user_id,
+                ttl_days=settings.memory_ttl_days,
+                min_access=settings.memory_ttl_min_access,
+            )
+
+        if saved:
+            logger.info(
+                "Extracted and saved %d new memories for user=%s",
+                saved, self._user_id,
+            )
 
 
 __all__ = [

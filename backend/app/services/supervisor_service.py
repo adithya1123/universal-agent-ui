@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.memory import UserMemoryService
+from app.memory import MemoryExtractor, UserMemoryService
 from app.supervisor import AsyncLangGraphSupervisor
 
 logger = logging.getLogger(__name__)
@@ -188,6 +188,15 @@ class SupervisorService:
         if client._store is None:
             raise RuntimeError("Store not initialized for endpoint: %s", endpoint_url)
         return UserMemoryService(client._store)
+
+    async def get_memory_bundle(
+        self, endpoint_url: str,
+    ) -> tuple[UserMemoryService, MemoryExtractor | None]:
+        """Get both UserMemoryService and MemoryExtractor for the endpoint."""
+        client = await self._get_client(endpoint_url)
+        if client._store is None:
+            raise RuntimeError("Store not initialized for endpoint: %s", endpoint_url)
+        return UserMemoryService(client._store), client._memory_extractor
 
 
 # Global singleton

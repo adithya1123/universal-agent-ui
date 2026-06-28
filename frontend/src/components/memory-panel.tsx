@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
+  Combine,
+  Loader2,
   Plus,
   Trash2,
   RefreshCw,
@@ -13,6 +15,8 @@ import {
   listMemories,
   saveMemory,
   deleteMemory,
+  previewConsolidation,
+  applyConsolidation,
   MemoryEntry,
 } from "@/lib/api";
 
@@ -55,6 +59,13 @@ export function MemoryPanel({
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [newCategory, setNewCategory] = useState("preference");
+  const [consolidating, setConsolidating] = useState(false);
+  const [consolidationResult, setConsolidationResult] = useState<{
+    before_count: number;
+    after_count: number;
+    proposed: MemoryEntry[];
+  } | null>(null);
+  const [consolidationError, setConsolidationError] = useState<string | null>(null);
 
   const sortedMemories = useMemo(() => {
     return [...memories].sort((a, b) => {
@@ -108,6 +119,34 @@ export function MemoryPanel({
     }
   };
 
+  const handleStartConsolidate = async () => {
+    setConsolidating(true);
+    setConsolidationError(null);
+    try {
+      const result = await previewConsolidation(agentId, userId);
+      setConsolidationResult(result);
+    } catch (e) {
+      setConsolidationError(e instanceof Error ? e.message : "Consolidation preview failed");
+    } finally {
+      setConsolidating(false);
+    }
+  };
+
+  const handleApplyConsolidation = async () => {
+    if (!consolidationResult) return;
+    setConsolidating(true);
+    setConsolidationError(null);
+    try {
+      await applyConsolidation(agentId, userId, consolidationResult.proposed);
+      setConsolidationResult(null);
+      await fetchMemories();
+    } catch (e) {
+      setConsolidationError(e instanceof Error ? e.message : "Consolidation apply failed");
+    } finally {
+      setConsolidating(false);
+    }
+  };
+
   if (collapsed) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -130,6 +169,14 @@ export function MemoryPanel({
             title="Refresh"
           >
             <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+          </button>
+          <button
+            onClick={handleStartConsolidate}
+            disabled={memories.length < 2 || consolidating}
+            className="p-1 rounded hover:bg-sidebar-accent text-sidebar-foreground/60 hover:text-sidebar-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Consolidate similar memories"
+          >
+            <Combine className="size-3.5" />
           </button>
           <button
             onClick={() => setShowAdd(!showAdd)}
@@ -187,67 +234,117 @@ export function MemoryPanel({
         </div>
       )}
 
-      {/* Memory list */}
+      {/* Memory list or consolidation preview */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1.5">
-        {loading && memories.length === 0 && (
-          <p className="px-3 py-8 text-xs text-muted-foreground text-center">
-            Loading...
-          </p>
-        )}
-        {!loading && memories.length === 0 && (
-          <p className="px-3 py-8 text-xs text-muted-foreground text-center">
-            No memories saved yet.
-            <br />
-            <button
-              onClick={() => setShowAdd(true)}
-              className="text-blue-500 hover:underline mt-1"
-            >
-              Add one
-            </button>
-          </p>
-        )}
-        {sortedMemories.map((mem) => (
-          <div
-            key={mem.key}
-            className="group relative p-2.5 rounded-md text-xs bg-sidebar-accent/30 hover:bg-sidebar-accent/50 transition-colors"
-          >
-            <div className="flex items-start justify-between gap-1">
-              <div className="flex-1 min-w-0">
+        {consolidationResult ? (
+          <>
+            <div className="px-1 py-1">
+              <p className="text-xs text-sidebar-foreground/80">
+                <span className="font-medium text-sidebar-foreground">{consolidationResult.before_count}</span> memories →{" "}
+                <span className="font-medium text-green-600 dark:text-green-400">{consolidationResult.after_count}</span> after merging
+                {consolidationResult.before_count > consolidationResult.after_count && (
+                  <span className="text-green-600 dark:text-green-400">
+                    {" "}({consolidationResult.before_count - consolidationResult.after_count} less)
+                  </span>
+                )}
+              </p>
+            </div>
+            {consolidationError && (
+              <div className="px-3 py-1.5 text-xs text-red-500 bg-red-500/10 rounded-md">
+                {consolidationError}
+              </div>
+            )}
+            {consolidationResult.proposed.map((mem, i) => (
+              <div key={i} className="p-2.5 rounded-md text-xs bg-sidebar-accent/30">
                 <div className="flex items-center gap-1.5 flex-wrap mb-1">
                   <span className="font-medium text-sidebar-foreground truncate max-w-[140px]">
                     {mem.key}
                   </span>
                   {mem.category && (
-                    <span
-                      className={cn(
-                        "px-1.5 py-0.5 rounded text-[10px] font-medium leading-none",
-                        CATEGORY_COLORS[mem.category] ||
-                          "bg-neutral-500/10 text-neutral-600 dark:text-neutral-400",
-                      )}
-                    >
+                    <span className={cn(
+                      "px-1.5 py-0.5 rounded text-[10px] font-medium leading-none",
+                      CATEGORY_COLORS[mem.category] || "bg-neutral-500/10 text-neutral-600",
+                    )}>
                       {mem.category}
                     </span>
                   )}
                 </div>
-                <p className="text-sidebar-foreground/70 leading-relaxed line-clamp-3">
-                  {mem.value}
-                </p>
-                {mem.updated_at && (
-                  <p className="text-[10px] text-sidebar-foreground/40 mt-1">
-                    Updated {formatRelativeTime(mem.updated_at)}
-                  </p>
-                )}
+                <p className="text-sidebar-foreground/70 leading-relaxed">{mem.value}</p>
               </div>
+            ))}
+            <div className="flex items-center justify-end gap-2 pt-2">
               <button
-                onClick={() => handleDelete(mem.key)}
-                className="shrink-0 p-1 rounded text-muted-foreground/40 hover:text-red-500 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
-                title="Delete memory"
+                onClick={() => { setConsolidationResult(null); setConsolidationError(null); }}
+                className="px-3 py-1.5 text-xs rounded border border-sidebar-border text-sidebar-foreground/70 hover:bg-sidebar-accent"
               >
-                <Trash2 className="size-3" />
+                Cancel
+              </button>
+              <button
+                onClick={handleApplyConsolidation}
+                disabled={consolidating}
+                className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {consolidating && <Loader2 className="size-3 animate-spin" />}
+                {consolidating ? "Applying..." : "Apply Changes"}
               </button>
             </div>
-          </div>
-        ))}
+          </>
+        ) : (
+          <>
+            {loading && memories.length === 0 && (
+              <p className="px-3 py-8 text-xs text-muted-foreground text-center">Loading...</p>
+            )}
+            {!loading && memories.length === 0 && (
+              <p className="px-3 py-8 text-xs text-muted-foreground text-center">
+                No memories saved yet.
+                <br />
+                <button onClick={() => setShowAdd(true)} className="text-blue-500 hover:underline mt-1">
+                  Add one
+                </button>
+              </p>
+            )}
+            {sortedMemories.map((mem) => (
+              <div
+                key={mem.key}
+                className="group relative p-2.5 rounded-md text-xs bg-sidebar-accent/30 hover:bg-sidebar-accent/50 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-1">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                      <span className="font-medium text-sidebar-foreground truncate max-w-[140px]">
+                        {mem.key}
+                      </span>
+                      {mem.category && (
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded text-[10px] font-medium leading-none",
+                          CATEGORY_COLORS[mem.category] ||
+                            "bg-neutral-500/10 text-neutral-600 dark:text-neutral-400",
+                        )}>
+                          {mem.category}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sidebar-foreground/70 leading-relaxed line-clamp-3">
+                      {mem.value}
+                    </p>
+                    {mem.updated_at && (
+                      <p className="text-[10px] text-sidebar-foreground/40 mt-1">
+                        Updated {formatRelativeTime(mem.updated_at)}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleDelete(mem.key)}
+                    className="shrink-0 p-1 rounded text-muted-foreground/40 hover:text-red-500 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Delete memory"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
     </div>
   );

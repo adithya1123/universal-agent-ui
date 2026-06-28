@@ -597,11 +597,8 @@ class AsyncLangGraphSupervisor:
             })
 
         # Bump access counts for injected memories (fire-and-forget)
-        for mem in memories:
-            try:
-                await ms.bump_access(user_id, mem.get("key", ""))
-            except Exception:
-                logger.debug("Failed to bump access for memory key=%s", mem.get("key"))
+        inj_keys = [mem.get("key", "") for mem in memories]
+        await ms.batch_bump_access(user_id, inj_keys)
 
         logger.info(
             "Injected %d memories for user=%s into query context",

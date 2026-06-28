@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     memory_max_per_user: int = 100
     memory_max_value_size: int = 4096
     memory_injection_max: int = 10
+    memory_extraction_cooldown_minutes: int = 5
+    memory_extraction_min_message_length: int = 50
+    memory_extraction_window: int = 10
+    memory_ttl_days: int = 90
+    memory_ttl_min_access: int = 2
 
     mlflow_tracking_uri: str = "databricks"
     mlflow_experiment_id: str = ""

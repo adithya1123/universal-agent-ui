@@ -76,6 +76,25 @@ Conversation:
 
 Title:"""
 
+CONSOLIDATION_PROMPT = """\
+You are a memory consolidation system. Given a list of user fact memories,
+identify semantically overlapping or duplicate facts and merge them.
+
+Rules:
+1. Merge facts that say the same thing differently, or where one fact is a subset of another
+2. Keep unique, distinct facts exactly as-is — do NOT reword unchanged facts
+3. Each merged fact should combine information from its sources into one concise sentence
+4. Generate a clear snake_case key for each fact (merged or kept)
+5. Preserve the most specific category: preference > project > background > constraint > other
+6. Discard facts that are clearly outdated, trivial, or fully subsumed by another fact
+7. Output ONLY a valid JSON array — no markdown, no explanation
+8. Output count MUST be ≤ input count
+
+Existing memories:
+{memories}
+
+JSON:"""
+
 
 class UserMemoryService:
     """Long-term user memory CRUD via AsyncDatabricksStore.
@@ -111,6 +130,10 @@ class UserMemoryService:
         if items:
             return [{"key": item.key, **item.value} for item in items]
         return []
+
+    async def list_keys(self, user_id: str, *, limit: int = 100) -> List[str]:
+        items = await self._store.asearch(self._ns(user_id), query="", limit=limit)
+        return [item.key for item in items] if items else []
 
     async def search_memories(self, user_id: str, query: str, *, limit: int = 10) -> List[Dict[str, Any]]:
         try:
@@ -179,6 +202,11 @@ class UserMemoryService:
                 return False
 
         await self._store.aput(self._ns(user_id), key, data)
+
+        actual_count = await self.count_memories(user_id)
+        if actual_count > self.MAX_PER_USER:
+            await self._evict_oldest(user_id)
+
         logger.info("Saved memory key=%s for user=%s", key, user_id)
         return True
 
@@ -189,6 +217,17 @@ class UserMemoryService:
             existing["access_count"] = existing.get("access_count", 0) + 1
             existing["updated_at"] = _now_iso()
             await self._store.aput(self._ns(user_id), key, existing)
+
+    async def batch_bump_access(self, user_id: str, keys: List[str]) -> None:
+        for key in keys:
+            try:
+                existing = await self.get_memory(user_id, key)
+                if existing and isinstance(existing, dict):
+                    existing["access_count"] = existing.get("access_count", 0) + 1
+                    existing["updated_at"] = _now_iso()
+                    await self._store.aput(self._ns(user_id), key, existing)
+            except Exception:
+                logger.debug("Failed to bump access for memory key=%s", key)
 
     async def list_memories_for_injection(
         self, user_id: str, *, limit: int = 10,
@@ -232,11 +271,39 @@ class UserMemoryService:
         logger.info("Deleted %d memories for user=%s", count, user_id)
         return count
 
+    async def replace_all_memories(
+        self, user_id: str, new_memories: List[Dict[str, Any]],
+    ) -> tuple[int, int]:
+        """Delete all non-system memories and save a consolidated set.
+
+        Returns (deleted_count, saved_count).
+        """
+        existing_keys = await self.list_keys(user_id)
+        deleted = 0
+        for key in existing_keys:
+            if not key.startswith("_system_"):
+                await self.delete_memory(user_id, key)
+                deleted += 1
+
+        saved = 0
+        for mem in new_memories:
+            ok = await self.save_memory(
+                user_id, mem["key"],
+                {"value": mem.get("value", ""), "category": mem.get("category", "other")},
+            )
+            if ok:
+                saved += 1
+
+        logger.info(
+            "Replaced %d memories with %d consolidated for user=%s",
+            deleted, saved, user_id,
+        )
+        return deleted, saved
+
     async def _evict_oldest(self, user_id: str) -> Optional[str]:
         """Remove the least recently updated memory to free quota."""
         items = await self._store.asearch(self._ns(user_id), query="", limit=self.MAX_PER_USER)
         if not items or len(items) < self.MAX_PER_USER:
-            # Under quota — shouldn't be called, but safe no-op
             return None
 
         def _updated_ts(item: Any) -> str:
@@ -248,6 +315,25 @@ class UserMemoryService:
         await self._store.adelete(self._ns(user_id), oldest.key)
         logger.info("Evicted memory key=%s for user=%s", oldest.key, user_id)
         return oldest.key
+
+    async def _evict_stale(self, user_id: str, *, ttl_days: int = 90, min_access: int = 2) -> int:
+        from datetime import timedelta
+        items = await self._store.asearch(self._ns(user_id), query="", limit=self.MAX_PER_USER)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+        evicted = 0
+        for item in items:
+            val = item.value or {}
+            updated = val.get("updated_at", "")
+            try:
+                if updated and datetime.fromisoformat(updated) < cutoff:
+                    if val.get("access_count", 0) < min_access:
+                        await self._store.adelete(self._ns(user_id), item.key)
+                        evicted += 1
+            except (ValueError, TypeError):
+                pass
+        if evicted:
+            logger.info("TTL evicted %d stale memories for user=%s", evicted, user_id)
+        return evicted
 
     def format_for_context(self, memories: List[Dict[str, Any]], max_items: int = 10) -> str:
         """Format memories into a context block for agent injection.
@@ -261,8 +347,8 @@ class UserMemoryService:
         lines = [self.MEMORY_CONTEXT_HEADER]
         for m in memories[:max_items]:
             key = m.get("key", "")
-            value = m.get("data", {}).get("value", "") if isinstance(m.get("data"), dict) else m.get("value", "")
-            category = m.get("data", {}).get("category", "") if isinstance(m.get("data"), dict) else ""
+            value = m.get("value", "")
+            category = m.get("category", "")
             if isinstance(value, dict):
                 value = "; ".join(f"{k}={v}" for k, v in value.items())
             label = f"[{category}] " if category else ""
@@ -318,6 +404,36 @@ class MemoryExtractor:
             raise
         except Exception as e:
             logger.warning("Memory extraction LLM call failed: %s", e)
+            return []
+
+    async def consolidate_memories(
+        self,
+        memories: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Consolidate semantically overlapping user memories via LLM.
+
+        Args:
+            memories: List of dicts with "key", "value", "category".
+
+        Returns:
+            Consolidated list of {"key": str, "value": str, "category": str}.
+        """
+        if not memories:
+            return []
+
+        mem_lines = [
+            f"- {m['key']}: {m.get('value', '')} [{m.get('category', 'other')}]"
+            for m in memories
+        ]
+        prompt = CONSOLIDATION_PROMPT.format(memories="\n".join(mem_lines))
+
+        try:
+            raw = await self._call_llm(prompt)
+            return self._parse_response(raw)
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.warning("Memory consolidation LLM call failed: %s", e)
             return []
 
     async def generate_title(
@@ -416,8 +532,9 @@ class MemoryExtractor:
         validated = []
         for f in facts:
             if isinstance(f, dict) and "key" in f and "data" in f:
-                validated.append({"key": str(f["key"]), "data": f["data"]})
+                d = f["data"] if isinstance(f["data"], dict) else {"value": str(f["data"])}
+                validated.append({"key": str(f["key"]), "value": d.get("value", ""), "category": d.get("category", "other")})
             elif isinstance(f, dict) and "key" in f:
-                validated.append({"key": str(f["key"]), "data": {k: v for k, v in f.items() if k != "key"}})
+                validated.append({"key": str(f["key"]), "value": str(f.get("value", "")), "category": f.get("category", "other")})
 
         return validated

@@ -65,6 +65,27 @@ export async function saveMemory(
   await apiPost("/api/memory", { agent_id: agentId, user_id: userId, key, data });
 }
 
+export async function previewConsolidation(
+  agentId: string,
+  userId: string,
+): Promise<{
+  before_count: number;
+  after_count: number;
+  proposed: MemoryEntry[];
+}> {
+  const params = new URLSearchParams({ agent_id: agentId, user_id: userId });
+  return apiPost(`/api/memory/consolidate/preview?${params}`, {});
+}
+
+export async function applyConsolidation(
+  agentId: string,
+  userId: string,
+  consolidated: MemoryEntry[],
+): Promise<{ before_count: number; after_count: number }> {
+  const params = new URLSearchParams({ agent_id: agentId, user_id: userId });
+  return apiPost(`/api/memory/consolidate/apply?${params}`, consolidated);
+}
+
 export async function deleteMemory(
   agentId: string,
   userId: string,
