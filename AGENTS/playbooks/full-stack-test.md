@@ -46,6 +46,36 @@ Open `http://localhost:3000`. The frontend should:
 - Allow typing in the chat input
 - Stream responses from the supervisor
 
+### 6. Test auto-title generation
+```bash
+# Get a thread_id from step 4 (list sessions)
+THREAD_ID="<thread-id-from-step-4>"
+curl "http://localhost:8000/api/sessions/$THREAD_ID/auto-title?agent_id=$AGENT_ID"
+# → {"title":"Generated 3-5 Word Title"}
+```
+
+Then verify the title was updated:
+```bash
+curl "http://localhost:8000/api/sessions?agent_id=$AGENT_ID&user_id=test@user.com" | python3 -m json.tool
+# The thread should now show the generated title instead of the first message
+```
+
+### 7. Test manual rename
+```bash
+curl -X PATCH "http://localhost:8000/api/sessions/$THREAD_ID/title?agent_id=$AGENT_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My custom title"}'
+# → {"status":"updated","title":"My custom title"}
+```
+
+Verify: `curl "http://localhost:8000/api/sessions?agent_id=$AGENT_ID&user_id=test@user.com"` shows "My custom title".
+
+## Verification
+After making ALL changes, verify no file was accidentally corrupted by running:
+```bash
+wc -l /Users/adithya/Desktop/LLM/universal-agent-ui/AGENTS/*.md /Users/adithya/Desktop/LLM/universal-agent-ui/AGENTS/contracts/*.md /Users/adithya/Desktop/LLM/universal-agent-ui/AGENTS/playbooks/*.md
+```
+
 ## Common failure modes
 
 | Step | Symptom | Fix |
@@ -63,4 +93,4 @@ curl -N -X POST http://localhost:8000/ag-ui/run ... 2>&1 | head -20
 ```
 Look for `[Backend error: ...]` or read the uvicorn server logs for the full stack trace.
 
-_Last updated: 2026-06-23_
+_Last updated: 2026-06-27_

@@ -32,7 +32,7 @@ CopilotKit Runtime (single-route) → POST /ag-ui/run → SupervisorService (cli
                                                             ├── _sse_stream() → direct httpx SSE to /invocations
                                                             └── Databricks Lakebase (dual-store)
                                                                 ├── checkpoints (unreliable — not used for reads)
-                                                                └── store (threads, by_user, messages_history)
+                                                                └── store (threads, by_user, user_memories)
 ```
 
 ## Notable fixes during setup
@@ -53,6 +53,8 @@ CopilotKit Runtime (single-route) → POST /ag-ui/run → SupervisorService (cli
 | New Chat shows old messages | CopilotKit provider persists across remounts; `agent.messages` never cleared | `agent.setMessages([])` on new chat |
 | Delete thread was a no-op | `supervisor_service.delete_thread()` only logged | `AsyncDatabricksStore.adelete()` + `AsyncCheckpointSaver.adelete_thread()` across all 5 store namespaces |
 | Frontend delete didn't call API | `handleDeleteSession` only removed local state | `apiDelete()` to `DELETE /api/sessions/{thread_id}` |
+| Title generation fails | SP lacks `Can Query` on `deepseek-v4flash-chat` endpoint | `PermissionError` handled, falls back to first user message; log tells you which endpoint needs permission |
+| Auto-title not working | User didn't click sparkle icon | Auto-title is manual (click sparkle), not automatic — preserves existing first-turn fallback |
 
 ## Delete thread — data cleaned from Lakebase
 
@@ -65,4 +67,4 @@ CopilotKit Runtime (single-route) → POST /ag-ui/run → SupervisorService (cli
 | DatabricksStore | `("messages", <thread_id>)` | each `message_id` (per-turn tracking) |
 | CheckpointSaver | thread-scoped | `adelete_thread(thread_id)` (state) |
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-27_

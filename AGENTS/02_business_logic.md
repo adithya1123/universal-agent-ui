@@ -16,14 +16,24 @@ The `_extract_and_store_result()` function determines which tabular data to save
 
 ## Thread Title Derivation
 
-The thread title is set automatically on the **first turn** of a conversation:
+Titles are set through a three-tier strategy, from most to least preferred:
 
-1. The first user question is truncated to 100 characters
-2. Newlines are replaced with spaces
-3. The result is stored as `title` in all DatabricksStore namespaces (threads, by_user, by_correlation)
-4. Initial title is always `"New conversation"` until the first AI response completes
+1. **Auto-generated via LLM** — The `POST /{thread_id}/auto-title` endpoint calls `MemoryExtractor.generate_title()`, which sends the last 6 conversation messages to DeepSeek v4 Flash with a prompt asking for a 3-5 word descriptive title. If the LLM returns a valid title, it is persisted to all DatabricksStore namespaces.
 
-This means an empty thread (created but never queried) retains the title `"New conversation"`.
+2. **Manual rename** — The `PATCH /{thread_id}/title` endpoint allows users to set a custom title directly. The title is truncated to 100 characters.
+
+3. **First user question fallback** — On the first turn, if no auto-title has been generated, the first user question is truncated to 100 characters (newlines replaced with spaces). This matches the original behavior.
+
+**Auto-title trigger**: The user clicks the ✨ sparkle icon next to a session in the sidebar. A Loader2 spinner animates while the LLM call is in-flight (~1-2s).
+
+**Manual rename trigger**: The user double-clicks the session title or clicks the ✏️ pencil icon on hover. An inline `<input>` appears with Enter to save, Escape to cancel, and blur to commit.
+
+**Title update path**: All three DatabricksStore namespaces are updated atomically via `GetOp` batch + `PutOp` batch (`update_thread_title()` in `lg_client.py`):
+- `("threads",)` / `thread_id` — full metadata
+- `("by_user", <user_id>)` / `thread_id` — user index
+- `("by_correlation", <corr_id>)` / `thread_id` — correlation index
+
+Initial title is always `"New conversation"` until a title is set.
 
 ## Session Sorting
 
@@ -108,4 +118,4 @@ The CopilotKit Runtime runs in **single-route mode** (`mode: "single-route"`), w
 5. Sent as `agent_id` in JSON body to `/ag-ui/run`
 6. Backend looks up agent by ID in SQLite registry to get the endpoint URL
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-27_

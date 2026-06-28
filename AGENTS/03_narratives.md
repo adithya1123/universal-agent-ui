@@ -29,7 +29,7 @@ Bridges the CopilotKit Runtime (Next.js) to the supervisor service. Accepts POST
 
 **Why it exists**: The CopilotKit Runtime is in JavaScript and cannot call the Databricks Responses API directly. This endpoint acts as the translation layer between the AG-UI protocol (used by CopilotKit) and the supervisor client (used by the backend). The `/ag-ui/run` endpoint extracts the last user message, looks up the agent endpoint URL from SQLite, creates/reuses a thread, and streams text deltas from the supervisor.
 
-**What it does NOT handle**: Authentication, user management, agent registration. It trusts the CopilotKit Runtime to pass the correct agentId.
+**What it does NOT handle**: Authentication, user management, agent registration, session title generation. It trusts the CopilotKit Runtime to pass the correct agentId.
 
 ## `frontend/src/app/api/copilotkit/route.ts` — CopilotKit Runtime
 
@@ -51,6 +51,46 @@ Seven client components that make up the chat interface: Chat, ChatHeader, Messa
 
 **What it does NOT handle**: Agent logic. All components are presentational and delegate to CopilotKit's `useAgent` hook.
 
+**Recent additions**: The Sidebar component now supports two new interactions:
+- **Sparkle icon** (✨, shown on hover) — triggers auto-title generation via `onAutoTitle` callback. Shows a spinning `Loader2` icon during generation.
+- **Inline title editing** — double-click or click the ✏️ pencil icon to enter edit mode with an `<input>`. Enter saves (calls `onRenameSession`), Escape cancels, blur commits.
+- **Edit state management**: `editingId` state tracks which session is being edited, `editInputRef` auto-focuses the input on mount. The edit is committed on blur (mouse leave).
+
+## `backend/app/memory.py` — Memory Extraction &amp; CRUD
+
+Two classes that together provide long-term user memory: `UserMemoryService` for CRUD,
+and `MemoryExtractor` for LLM-based fact extraction from conversation.
+
+**Why it exists**: Without long-term memory, the supervisor agent treats every turn as
+a cold start — it remembers nothing about the user from previous sessions. The dual-design
+separates storage concerns (UserMemoryService) from LLM querying (MemoryExtractor),
+so the extraction model can be swapped independently of storage.
+
+**UserMemoryService**: Manages user memories in the DatabricksStore under namespace
+`("user_memories", <sanitized_user_id>)`. Features LRU eviction (oldest key by sort)
+when `memory_max_per_user` is reached, value size checks (`memory_max_value_size = 4096`),
+and `format_for_context()` for structured injection.
+
+**MemoryExtractor**: Calls a Databricks serving endpoint (default: `deepseek-v4flash-chat`)
+with a structured extraction prompt that instructs the LLM to return a JSON array of facts.
+Also provides `generate_title()` for auto-title generation using the same endpoint but
+simpler prompt and `max_tokens=60`.
+
+**What it does NOT handle**: Conversation state, checkpoint management, user auth, CSV extraction.
+
+**Failure modes**:
+- PermissionError from `_call_llm()` when SP lacks `Can Query` on the serving endpoint
+- Memory quota exceeded results in oldest memory eviction (silent, logged at INFO)
+- Title generation LLM failure ⇒ falls back to first user message (soft degradation)
+
+**Auto-title generation flow**:
+1. User clicks ✨ sparkle in sidebar
+2. Frontend calls `POST /api/sessions/{thread_id}/auto-title`
+3. Backend loads conversation history from checkpoint (last 6 messages)
+4. `MemoryExtractor.generate_title()` sends them to DeepSeek v4 Flash
+5. LLM returns 3-5 word title → persisted via `update_thread_title()` to all namespaces
+6. Frontend receives `{"title": "..."}` and updates sidebar in place
+
 ## `backend/app/supervisor/streaming.py` — Message Persistence
 
 `_PersistingStreamWrapper` is the final link in the streaming chain — it persists messages after the SSE stream completes.
@@ -64,4 +104,4 @@ Seven client components that make up the chat interface: Chat, ChatHeader, Messa
 - MLflow trace tagging failure → logged at WARNING, non-critical
 - CSV volume write failure → logged at WARNING, non-critical
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-27_

@@ -34,6 +34,13 @@ Returns the stream from `AsyncLangGraphSupervisor.query_stream()`. Will init cli
 ### `delete_thread(endpoint_url, thread_id) -> None`
 **No-op**: logs the intent but does not delete from Lakebase. Threads persist indefinitely.
 
+### `update_thread_title(endpoint_url, thread_id, title) -> None`
+Delegates to `AsyncLangGraphSupervisor.update_thread_title()`. Will init client if needed.
+
+### `generate_thread_title(endpoint_url, thread_id) -> str`
+Delegates to `AsyncLangGraphSupervisor.generate_thread_title()`. Will init client if needed.
+Returns the new title string.
+
 ## Side Effects
 - First call to any method with a new endpoint_url opens persistent Lakebase connections
 - Each client maintains control over its own checkpoint saver + store
@@ -44,8 +51,8 @@ Settings returns `""` for unset env vars. The service sanitizes these with a `_v
 
 ## Consumed by
 - `routers/ag_ui.py` (the CopilotKit streaming endpoint)
-- `routers/sessions.py` (thread listing, history, metadata)
+- `routers/sessions.py` (thread listing, history, metadata, auto-title, title update)
 - `routers/agents.py` (the `/chat` endpoint)
 - `app/main.py` lifecycle (start/stop in lifespan)
 
-_Last updated: 2026-06-23_
+_Last updated: 2026-06-27_

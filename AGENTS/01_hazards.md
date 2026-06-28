@@ -12,6 +12,17 @@
 
 5. **Never delete the SQLite database manually while the app is running** — It holds the agent registry. Delete only when the server is stopped.
 
+6. **Never assume the memory extraction model has permissions** — The service principal
+   needs `Can Query` on the serving endpoint defined by `MEMORY_EXTRACTION_MODEL`.
+   Without it, `_call_llm()` raises `PermissionError`, which permanently disables
+   extraction for that session. The error message tells you exactly which endpoint
+   needs permission. Always verify SP permissions after deploying or changing the
+   extraction model.
+
+7. **Never use auto-title generation without checking for memory extraction model permission** —
+   `generate_title()` also calls `_call_llm()` which raises `PermissionError` if the
+   SP lacks `Can Query`. The same endpoint serves both extraction and title generation.
+
 ## 🟡 CAUTION
 
 1. **OAuth tokens expire** — The `WorkspaceClient` handles OAuth M2M auto-refresh, but if the SP secret is rotated, the backend must be restarted.
@@ -34,6 +45,17 @@
 
 10. **LangGraph checkpoint is unreliable for message history** — The `AsyncCheckpointSaver`'s PostgreSQL connection pool destroys workers under uvicorn's async lifecycle (`Task was destroyed but it is pending!`). Data committed in one connection is lost before the next HTTP request. Do NOT rely on `aget_state()` for message history across requests. Use the DatabricksStore (under `threads/{thread_id}/messages`) for reliable message persistence. The `_PersistingStreamWrapper` only writes to the store (checkpoint persists are dead code).
 
+11. **Title generation uses the last 6 messages only** — `generate_title()` takes
+    `conversation[-6:]` (~3 recent turns). If the conversation is very long (>20 turns),
+    earlier context is lost. Users can re-click the sparkle icon after more conversation
+    to update the title with current context. This is by design — it keeps tokens low
+    and titles relevant to the current topic.
+
+12. **Auto-title is NOT automatically triggered on new conversations** — On first turn,
+    the title is set to the first user question (truncated). Auto-title must be explicitly
+    triggered by the user clicking the sparkle icon. The existing first-turn fallback
+    behavior is preserved to avoid an extra LLM call on every single conversation.
+
 ## ⚪ CONVENTION
 
 1. **Three-router pattern** — Backend routes are split into `agents.py` (CRUD), `ag_ui.py` (streaming), and `sessions.py` (thread management). New routes should follow this split: agent lifecycle → `agents`, agent communication → `ag_ui`, thread/session queries → `sessions`.
@@ -42,4 +64,4 @@
 
 3. **Supervisor client is a lazy singleton pool** — `SupervisorService._get_client()` creates clients on first use per endpoint URL. Always get a client through the service, never instantiate `AsyncLangGraphSupervisor` directly outside of the service.
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-27_

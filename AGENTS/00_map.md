@@ -30,7 +30,8 @@
 | Supervisor service | `backend/app/services/supervisor_service.py` | → `contracts/supervisor_service.md` |
 | Agent CRUD | `backend/app/routers/agents.py` | — |
 | AG-UI streaming | `backend/app/routers/ag_ui.py` | — |
-| Session management | `backend/app/routers/sessions.py` | — |
+| Session management | `backend/app/routers/sessions.py` | → `contracts/sessions.md` |
+| User memory | `backend/app/memory.py` | → `contracts/memory.md` |
 | Database | `backend/app/db/` | — |
 | Auth | `backend/app/auth.py` | → `contracts/auth.md` (legacy) |
 | Message store | `backend/app/supervisor/streaming.py` | → `contracts/streaming.md` |
@@ -50,6 +51,9 @@
 | `MAX_HISTORY` | `10` | Sliding window size |
 | `SUPERVISOR_TIMEOUT` | `300` | Request timeout in seconds |
 | `AUTO_APPROVE_TOOLS` | `True` | Auto-approve MCP tool calls from the Supervisor (set `False` to require manual approval) |
+| `MEMORY_EXTRACTION_ENABLED` | `True` | Memory extraction + auto-title via DeepSeek v4 Flash |
+| `MEMORY_EXTRACTION_MODEL` | `deepseek-v4flash-chat` | Serving endpoint for memory extraction + title generation |
+| `MEMORY_MAX_PER_USER` | `100` | Max user memories before LRU eviction |
 | `NEXT_PUBLIC_DEFAULT_AGENT_ID` | — | Frontend env — agent UUID for CopilotKit runtime |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Frontend env — backend base URL |
 | `BACKEND_URL` | `http://localhost:8000` | CopilotKit Runtime — backend URL for proxy |
@@ -67,4 +71,4 @@ cd frontend && pnpm lint
 cd backend && uv run python -c "from app.main import app; print('OK')"
 ```
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-27_

@@ -52,6 +52,24 @@ AsyncLangGraphSupervisor(
 - Returns dicts with keys: `thread_id`, `title`, `correlation_id`, `created_at`
 - Sorted newest-first (not database-level, Python sort)
 
+### `update_thread_title(thread_id, new_title) -> None`
+- **Side effect**: Batch-updates title in all 3 DatabricksStore namespaces (threads, by_user, by_correlation)
+- Uses `GetOp` batch read + `PutOp` batch write for atomic consistency
+- Title is trimmed and truncated to 100 chars; empty/null becomes "Untitled"
+- Logs WARNING if thread not found (no-op, does NOT raise)
+- **Idempotency**: SAFE — identical title produces identical store writes
+
+### `generate_thread_title(thread_id) -> str`
+- **Produces**: A 3-5 word title generated from conversation history
+- Loads history from checkpoint via `get_history()`
+- Calls `MemoryExtractor.generate_title()` with the full history (method uses last 6 messages internally)
+- Falls back to first user message (truncated to 100 chars) if:
+  - `_memory_extractor` is None (extraction disabled)
+  - LLM call raises PermissionError (SP lacks permissions)
+  - LLM call fails for any other reason
+  - conversation is empty
+- **Side effect**: Persists the new title via `update_thread_title()`
+
 ### `get_history(thread_id) -> list[dict]`
 - Returns `[{"role": "user"|"assistant", "content": str}]`
 - Reads from DatabricksStore first (`{thread_id}/messages` key), falls back to checkpoint
@@ -83,4 +101,4 @@ AsyncLangGraphSupervisor(
 - **Failure mode**: Connection/HTTP errors propagate up to `query_stream()` which catches them and returns `AsyncStreamingResponse._from_error()`
 - **Why direct HTTP instead of `databricks-openai`**: `AsyncDatabricksOpenAI.responses.create(stream=True)` routes to `{base_url}/v1/responses` which the Databricks serving endpoint doesn't support, returning an empty stream. Direct SSE to `/invocations` works correctly.
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-27_
