@@ -38,9 +38,9 @@ importers:
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      plotly.js-dist-min:
+      plotly.js:
         specifier: ^3.6.0
-        version: 3.6.0
+        version: 3.6.0(mapbox-gl@1.13.3)
       react:
         specifier: 19.2.4
         version: 19.2.4
@@ -4521,9 +4521,6 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
-
-  plotly.js-dist-min@3.6.0:
-    resolution: {integrity: sha512-VR9jO2YdcEwbzVwtRyPE0eAieXFv1x5q6M9nnIgUS8FggahPrjiID6kzpnTYABwLX0gZkgEc0zxS6gQgVmgHzw==}
 
   plotly.js@3.6.0:
     resolution: {integrity: sha512-Fu5IaetcuxaeQPULk4wfIik0MnvIsEb5ynOsPAMfhAnjkPOEDFG7eSb/3ZZq1DW5MwYvZFXaTFHpal4U1Q5Yig==}
@@ -10926,8 +10923,6 @@ snapshots:
       thread-stream: 3.2.0
 
   pkce-challenge@5.0.1: {}
-
-  plotly.js-dist-min@3.6.0: {}
 
   plotly.js@3.6.0(mapbox-gl@1.13.3):
     dependencies:
