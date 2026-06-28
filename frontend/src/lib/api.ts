@@ -47,8 +47,8 @@ export async function listMemories(
   const data = await apiGet<Record<string, unknown>[]>(`/api/memory?${params}`);
   return data.map((m) => ({
     key: m.key as string,
-    value: (m.data as Record<string, unknown>)?.value as string ?? "",
-    category: (m.data as Record<string, unknown>)?.category as string ?? "",
+    value: (m.value as string) ?? "",
+    category: (m.category as string) ?? "",
   }));
 }
 
