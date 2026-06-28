@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import mlflow
 import time
+import traceback
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Set
 
 try:
@@ -37,6 +38,7 @@ except ImportError:
         "Install with: pip install langgraph --upgrade"
     )
 
+from app.memory import MemoryExtractor, UserMemoryService
 from app.supervisor.helpers import (
     AgentResult,
     ErrorCategory,
@@ -50,10 +52,8 @@ from app.supervisor.helpers import (
     _extract_and_store_result,
     _extract_text_from_item,
     _extract_trace_id,
-    _now_iso,
     _NS_BY_CORRELATION,
     _NS_BY_USER,
-    _NS_MESSAGES,
     _NS_THREADS,
     _safe_to_dict,
     _sanitize_ns,
@@ -466,6 +466,8 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
         result_volume: str = "",
         title: Optional[str] = None,
         volume_writer: Optional[VolumeWriter] = None,
+        memory_extractor: Optional[MemoryExtractor] = None,
+        user_memory_service: Optional[UserMemoryService] = None,
     ) -> None:
         self._inner = inner
         self._result: Optional[AgentResult] = None
@@ -482,6 +484,8 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
         self._result_volume = result_volume
         self._title = title
         self._volume_writer = volume_writer
+        self._memory_extractor = memory_extractor
+        self._user_memory_service = user_memory_service
 
     @property
     def _question(self) -> str:
@@ -521,49 +525,44 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
             self._result.result_files = all_files if all_files else None
 
         if self._result:
+            # Check if first turn + load existing results_index in one read
+            is_first_turn = False
+            existing_results = []
+            try:
+                if self._graph_ref:
+                    snap = await self._graph_ref.aget_state(self._config)
+                    state_vals = snap.values or {}
+                    prior_msg_count = len(state_vals.get("messages", []))
+                    existing_results = list(state_vals.get("results_index", []))
+                    is_first_turn = prior_msg_count == 0
+            except Exception:
+                pass
+
             answer = self._result.final_answer or "[No response from agent]"
             self._messages.append(AIMessage(content=answer))
 
-            is_first_turn = False
-            try:
-                existing = await self._store_ref.aget(_NS_THREADS, f"{self._thread_id}/messages")
-                existing_msgs = list(existing.value.get("messages", [])) if existing and existing.value else []
-                is_first_turn = len(existing_msgs) == 0
-                new_msgs = [
-                    {"role": "user" if isinstance(m, HumanMessage) else "assistant",
-                     "content": getattr(m, "content", "") if not isinstance(m, dict) else m.get("content", "")}
-                    for m in self._messages
-                ]
-                existing_msgs.extend(new_msgs)
-                await self._store_ref.aput(
-                    _NS_THREADS,
-                    f"{self._thread_id}/messages",
-                    {
-                        "thread_id": self._thread_id,
-                        "messages": existing_msgs,
-                        "updated_at": _now_iso(),
-                    },
-                )
-            except Exception as e:
-                logger.warning("Failed to persist message history to store: %s", e)
+            turn_entry = {
+                "message_id": self._message_id,
+                "question": self._result.question[:500],
+                "csv_path": self._result.result_file_path,
+                "result_meta": self._result.result_meta,
+                "all_files": [
+                    f["file_path"] for f in (self._result.result_files or [])
+                ] if self._result.result_files else [],
+                "latency_s": round(self._result.latency_s, 2),
+                "num_steps": self._result.num_steps,
+                "success": self._result.success,
+            }
+            existing_results.append(turn_entry)
 
             try:
-                await self._store_ref.aput(
-                    (*_NS_MESSAGES, self._thread_id),
-                    self._message_id,
-                    {
-                        "message_id": self._message_id,
-                        "thread_id": self._thread_id,
-                        "user_id": self._user_id,
-                        "question": self._result.question[:500],
-                        "csv_path": self._result.result_file_path,
-                        "success": self._result.success,
-                        "latency_s": round(self._result.latency_s, 2),
-                        "timestamp": _now_iso(),
-                    },
+                await self._graph_ref.aupdate_state(
+                    self._config,
+                    {"messages": self._messages, "results_index": existing_results},
+                    as_node="passthrough",
                 )
             except Exception as e:
-                logger.warning("Failed to write message tracking to store: %s", e)
+                logger.warning("Failed to persist AI response to checkpoint: %s", e)
 
             if is_first_turn and self._user_id:
                 title = self._question.strip().replace("\n", " ")[:100]
@@ -608,7 +607,45 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
         if self._result:
             self._result.title = self._question.strip().replace("\n", " ")[:100] if is_first_turn else self._title
 
-        if self._trace_id:
+        # -- Memory extraction (auto-detect storable facts from conversation) --
+        if self._memory_extractor and self._user_id and self._user_memory_service:
+            try:
+                recent = [
+                    {"role": "user" if isinstance(m, HumanMessage) else "assistant",
+                     "content": getattr(m, "content", "") or ""}
+                    for m in self._messages[-6:]
+                ]
+                existing = await self._user_memory_service.list_memories(self._user_id)
+                existing_keys = [m["key"] for m in existing]
+                new_facts = await self._memory_extractor.extract_from_turn(
+                    recent, existing_keys=existing_keys,
+                )
+                saved = 0
+                for fact in new_facts:
+                    ok = await self._user_memory_service.save_memory(
+                        self._user_id, fact["key"], fact["data"],
+                    )
+                    if ok:
+                        saved += 1
+                if saved:
+                    logger.info(
+                        "Extracted and saved %d new memories for user=%s",
+                        saved, self._user_id,
+                    )
+            except PermissionError:
+                logger.error(
+                    "Memory extraction permanently disabled for endpoint. "
+                    "Grant 'Can Query' permission to the App Service Principal "
+                    "on the serving endpoint, or set MEMORY_EXTRACTION_ENABLED=False "
+                    "in .env to silence this message."
+                )
+                self._memory_extractor = None
+            except Exception as e:
+                logger.warning("Memory extraction failed for thread %s: %s", self._thread_id, e)
+
+        if not self._trace_id:
+            logger.info("No trace_id available from stream — mlflow tags skipped")
+        else:
             for attempt in range(2):
                 try:
                     mlflow.set_trace_tag(self._trace_id, "thread_id", self._thread_id)
@@ -616,12 +653,13 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
                         mlflow.set_trace_tag(self._trace_id, "user_id", self._user_id)
                     if self._correlation_id:
                         mlflow.set_trace_tag(self._trace_id, "correlation_id", self._correlation_id)
+                    logger.info("Successfully set mlflow trace tags for %s", self._trace_id)
                     break
                 except Exception:
                     if attempt == 0:
                         await __import__("asyncio").sleep(1)
                     else:
-                        logger.warning("Failed to set trace tags for %s", self._trace_id)
+                        logger.warning("Failed to set trace tags for %s: %s", self._trace_id, traceback.format_exc())
 
 
 __all__ = [

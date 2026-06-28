@@ -97,7 +97,7 @@ except ImportError:
 
 try:
     from langgraph.graph import StateGraph, END
-    from langgraph.store.base import PutOp
+    from langgraph.store.base import GetOp, PutOp
 except ImportError:
     raise ImportError(
         "langgraph is required. "
@@ -111,6 +111,10 @@ except ImportError:
         "langchain-core is required. "
         "Install with: pip install langchain-core --upgrade"
     )
+
+# User memory service + extraction
+from app.config import settings
+from app.memory import MemoryExtractor, UserMemoryService
 
 # Streaming primitives
 from app.supervisor.streaming import (
@@ -129,7 +133,6 @@ from app.supervisor.helpers import (
     _now_iso,
     _NS_BY_CORRELATION,
     _NS_BY_USER,
-    _NS_MESSAGES,
     _NS_THREADS,
     _sanitize_ns,
 )
@@ -234,6 +237,8 @@ class AsyncLangGraphSupervisor:
         timeout: int = 300,
         databricks_host: Optional[str] = None,
         result_volume_path: Optional[str] = None,
+        memory_extraction_enabled: bool = True,
+        memory_extraction_model: str = "deepseek-v4flash-chat",
     ) -> None:
         parsed = urlparse(endpoint_url)
         self._host = databricks_host or f"{parsed.scheme}://{parsed.netloc}"
@@ -248,6 +253,8 @@ class AsyncLangGraphSupervisor:
         self.timeout = timeout
         self._result_volume = result_volume_path or \
             "/Volumes/tpo_d/tpo_data_model/tpo_genai_session_results"
+        self._memory_extraction_enabled = memory_extraction_enabled
+        self._memory_extraction_model = memory_extraction_model
 
         # Lakebase connection params (deferred initialization in __aenter__)
         self._lakebase_project = lakebase_project
@@ -285,6 +292,7 @@ class AsyncLangGraphSupervisor:
         self._checkpointer: Optional[AsyncCheckpointSaver] = None
         self._store: Optional[AsyncDatabricksStore] = None
         self._graph: Optional[Any] = None
+        self._memory_extractor: Optional[MemoryExtractor] = None
         self._exit_stack: Optional[AsyncExitStack] = None
 
         logger.info(
@@ -328,6 +336,15 @@ class AsyncLangGraphSupervisor:
 
         # Build LangGraph with the async checkpointer
         self._graph = self._build_graph()
+
+        # Memory extractor (LLM-based fact extraction — optional)
+        if self._memory_extraction_enabled:
+            self._memory_extractor = MemoryExtractor(
+                workspace_client=self._ws,
+                model_endpoint=self._memory_extraction_model,
+                databricks_host=self._host,
+            )
+            logger.info("MemoryExtractor initialized: model=%s", self._memory_extraction_model)
 
         logger.info("AsyncLangGraphSupervisor ready (dual-store initialized)")
         return self
@@ -448,17 +465,19 @@ class AsyncLangGraphSupervisor:
         """
         self._ensure_initialized()
         thread_id = thread_id or _uuid_gen()
-        config = _build_config(thread_id, user_id=user_id)
-        initial_state = AgentState(
-            messages=[],
-            agent_result=None,
-            results_index=[],
-            thread_id=thread_id,
-        )
-        await self._graph.aupdate_state(config, initial_state, as_node="passthrough")
+        config = _build_config(thread_id)
 
-        # Write tracking to DatabricksStore
-        await self._write_thread_tracking(thread_id, user_id, correlation_id)
+        # Only initialize checkpoint state + tracking for new threads
+        existing = await self._store.aget(_NS_THREADS, thread_id)
+        if not existing:
+            initial_state = AgentState(
+                messages=[],
+                agent_result=None,
+                results_index=[],
+                thread_id=thread_id,
+            )
+            await self._graph.aupdate_state(config, initial_state, as_node="passthrough")
+            await self._write_thread_tracking(thread_id, user_id, correlation_id)
 
         logger.info(
             "Created session thread_id=%s user_id=%s correlation_id=%s",
@@ -476,7 +495,6 @@ class AsyncLangGraphSupervisor:
         snapshot = await self._graph.aget_state(config)
         state = snapshot.values or {}
         messages = state.get("messages", [])
-        print(f"[get_state] thread={thread_id} cpid={checkpoint_id} msg_count={len(messages)} config={config}", flush=True)
         return config, messages
 
     def _messages_to_input(self, messages: List[BaseMessage]) -> List[Dict[str, str]]:
@@ -542,6 +560,44 @@ class AsyncLangGraphSupervisor:
                 # Emit a synthetic completed event at [DONE]
                 yield SimpleNamespace(type="response.completed", response=None, delta=None, item=None, databricks_output=None)
 
+    # -- Memory context injection --------------------------------------------
+
+    async def _inject_memory_context(
+        self,
+        input_messages: List[Dict[str, str]],
+        user_id: Optional[str],
+    ) -> List[Dict[str, str]]:
+        """Inject relevant user memories as context before the last user message.
+
+        Uses UserMemoryService.format_for_context() for structured formatting
+        with agent instructions. No-op if user_id is missing or no memories found.
+        """
+        if not user_id:
+            return input_messages
+        try:
+            ms = UserMemoryService(self._store)
+            memories = await ms.list_memories(user_id, limit=settings.memory_injection_max)
+        except Exception as e:
+            logger.debug("Memory injection skipped: %s", e)
+            return input_messages
+
+        if not memories:
+            return input_messages
+
+        context_text = ms.format_for_context(memories)
+
+        if input_messages and input_messages[-1].get("role") == "user":
+            insert_idx = len(input_messages) - 1
+            input_messages.insert(insert_idx, {
+                "role": "user",
+                "content": context_text,
+            })
+        logger.info(
+            "Injected %d memories for user=%s into query context",
+            len(memories), user_id,
+        )
+        return input_messages
+
     # -- Async streaming query -----------------------------------------------
     
     async def query_stream(
@@ -552,7 +608,7 @@ class AsyncLangGraphSupervisor:
         timeout: Optional[int] = None,
         store_raw: bool = False,
         checkpoint_id: Optional[str] = None,
-        auto_approve_tools: bool = False,
+        auto_approve_tools: bool = True,
         max_approval_rounds: int = 5,
     ) -> AsyncStreamingResponse:
         """Async streaming query with LangGraph session persistence.
@@ -587,16 +643,16 @@ class AsyncLangGraphSupervisor:
         # Read tracking fields from store
         user_id, correlation_id, title = await self._get_tracking_fields(thread_id)
 
-        # Append user message and persist
-        print(f"[query_stream] before persist: user_id={user_id} thread={thread_id} messages_before={len(messages)}", flush=True)
+        # Append user message to in-memory list (persisted later by _PersistingStreamWrapper)
         messages.append(HumanMessage(content=question))
-        user_config = _build_config(thread_id)
-        await self._graph.aupdate_state(user_config, {"messages": messages}, as_node="passthrough")
-        snapshot_after = await self._graph.aget_state(user_config)
-        print(f"[query_stream] after persist: messages_after={len(snapshot_after.values.get('messages', []))}", flush=True)
 
         # Build sliding-window input
         input_messages = self._messages_to_input(messages)
+
+        # Inject relevant user memories into the message context
+        input_messages = await self._inject_memory_context(
+            input_messages, user_id,
+        )
 
         # Create the async stream
         start = time.time()
@@ -621,7 +677,7 @@ class AsyncLangGraphSupervisor:
                 messages.append(AIMessage(content=error_msg))
                 try:
                     await self._graph.aupdate_state(
-                        user_config,
+                        config,
                         {"messages": messages, "agent_result": error_result.to_dict()},
                         as_node="passthrough",
                     )
@@ -632,19 +688,7 @@ class AsyncLangGraphSupervisor:
         if auto_approve_tools:
             # Build a stream factory for the approval loop (re-creates streams per round)
             async def _stream_factory(input_msgs):
-                return await self._client.responses.create(
-                    model=self.endpoint_name,
-                    input=input_msgs,
-                    stream=True,
-                    timeout=timeout or self.timeout,
-                    extra_body={
-                        "metadata": {"thread_id": thread_id,
-                                     "correlation_id": correlation_id,
-                                     "message_id": message_id,
-                                     "user_id": user_id},
-                        "databricks_options": {"return_trace": True},
-                    },
-                )
+                return self._sse_stream(input_msgs, timeout=timeout or self.timeout)
             raw_stream = _ApprovalLoopStream(
                 stream_factory=_stream_factory,
                 initial_input=input_messages,
@@ -664,6 +708,8 @@ class AsyncLangGraphSupervisor:
             result_volume=self._result_volume,
             title=title,
             volume_writer=self._volume_writer,
+            memory_extractor=self._memory_extractor,
+            user_memory_service=UserMemoryService(self._store) if self._memory_extractor else None,
         )
 
     # -- Async blocking query (convenience) ----------------------------------
@@ -676,7 +722,7 @@ class AsyncLangGraphSupervisor:
         timeout: Optional[int] = None,
         store_raw: bool = False,
         checkpoint_id: Optional[str] = None,
-        auto_approve_tools: bool = False,
+        auto_approve_tools: bool = True,
         max_approval_rounds: int = 5,
     ) -> AgentResult:
         """Async blocking query -- consumes the stream internally.
@@ -745,21 +791,6 @@ class AsyncLangGraphSupervisor:
 
         return threads
 
-    async def list_messages_for_thread(
-        self, thread_id: str, *, limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """List all message tracking entries for a thread.
-
-        Returns list of dicts with: message_id, question, csv_path, success,
-        latency_s, timestamp.
-        """
-        self._ensure_initialized()
-        items = await self._store.asearch(
-            (*_NS_MESSAGES, thread_id),
-            limit=limit,
-        )
-        return [item.value for item in items]
-
     async def get_thread_metadata(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Get the full tracking metadata for a single thread.
 
@@ -784,7 +815,6 @@ class AsyncLangGraphSupervisor:
         correlation_id = meta.get("correlation_id") if meta else None
 
         await self._store.adelete(_NS_THREADS, thread_id)
-        await self._store.adelete(_NS_THREADS, f"{thread_id}/messages")
 
         if user_id:
             await self._store.adelete(
@@ -799,41 +829,112 @@ class AsyncLangGraphSupervisor:
             )
 
         try:
-            items = await self._store.asearch(
-                (*_NS_MESSAGES, thread_id), limit=1000,
-            )
-            for item in items:
-                await self._store.adelete((*_NS_MESSAGES, thread_id), item.key)
-        except Exception as e:
-            logger.warning("Failed to delete per-message tracking: %s", e)
-
-        try:
             await self._checkpointer.adelete_thread(thread_id)
         except Exception as e:
             logger.warning("Failed to delete checkpoint data: %s", e)
 
         logger.info("Deleted thread %s from Lakebase", thread_id)
 
+    async def update_thread_title(self, thread_id: str, new_title: str) -> None:
+        """Update the title for a thread across all DatabricksStore namespaces.
+
+        Writes the new title to:
+            ("threads",) / thread_id
+            ("by_user", <user_id>) / thread_id
+            ("by_correlation", <corr_id>) / thread_id
+
+        Uses GetOp batch read + PutOp batch write for efficiency.
+        """
+        self._ensure_initialized()
+        new_title = new_title.strip()[:100] if new_title else "Untitled"
+
+        # Read existing metadata to find user_id and correlation_id
+        existing_thread = await self._store.aget(_NS_THREADS, thread_id)
+        if not existing_thread:
+            logger.warning("update_thread_title: thread %s not found", thread_id)
+            return
+
+        user_id = existing_thread.value.get("user_id")
+        corr_id = existing_thread.value.get("correlation_id")
+
+        # Batch-read all namespace entries
+        get_ops = [GetOp(namespace=_NS_THREADS, key=thread_id)]
+        if user_id:
+            get_ops.append(GetOp(
+                namespace=(*_NS_BY_USER, _sanitize_ns(user_id)),
+                key=thread_id,
+            ))
+        if corr_id:
+            get_ops.append(GetOp(
+                namespace=(*_NS_BY_CORRELATION, _sanitize_ns(corr_id)),
+                key=thread_id,
+            ))
+        get_results = await self._store.abatch(get_ops)
+
+        # Build batch-write with updated title
+        put_ops = []
+        for i, item in enumerate(get_results):
+            if item and item.value:
+                ns = get_ops[i].namespace
+                put_ops.append(PutOp(
+                    namespace=ns,
+                    key=thread_id,
+                    value={**item.value, "title": new_title},
+                ))
+
+        if put_ops:
+            await self._store.abatch(put_ops)
+            logger.info("Updated title for thread %s: '%s'", thread_id, new_title)
+
+    async def generate_thread_title(self, thread_id: str) -> str:
+        """Auto-generate a title for a thread from its conversation history.
+
+        Loads history from checkpoint, calls MemoryExtractor.generate_title()
+        via DeepSeek v4 Flash. Falls back to the first user message if the
+        extractor is unavailable or LLM call fails.
+
+        Returns:
+            The generated title string (max 100 chars).
+        """
+        self._ensure_initialized()
+
+        # Load conversation history from checkpoint
+        history = await self.get_history(thread_id)
+        if not history:
+            _, _, existing_title = await self._get_tracking_fields(thread_id)
+            return existing_title or "New conversation"
+
+        # Try LLM-based title generation
+        title = None
+        if self._memory_extractor:
+            try:
+                title = await self._memory_extractor.generate_title(history)
+            except PermissionError:
+                logger.warning(
+                    "Title generation skipped: SP lacks 'Can Query' on "
+                    "serving endpoint '%s'", self._memory_extraction_model,
+                )
+            except Exception as e:
+                logger.warning("Title generation failed: %s", e)
+
+        # Fallback: use first user message truncated
+        if not title:
+            first_user = next(
+                (m["content"] for m in history if m.get("role") == "user"),
+                "",
+            )
+            title = first_user.strip().replace("\n", " ")[:100] or "New conversation"
+
+        # Persist the new title
+        await self.update_thread_title(thread_id, title)
+        return title
+
     # -- History, results index, and checkpoints -----------------------------
 
     async def get_history(self, thread_id: str) -> List[Dict[str, str]]:
-        """Get full conversation history. Reads from DatabricksStore first (reliable),
-        falls back to checkpoint."""
+        """Get full conversation history from checkpoint state."""
         self._ensure_initialized()
-
-        # Primary: read from DatabricksStore (survives connection pool teardown)
-        try:
-            item = await self._store.aget(_NS_THREADS, f"{thread_id}/messages")
-            if item and item.value and item.value.get("messages"):
-                msgs = item.value["messages"]
-                print(f"[get_history] thread={thread_id} store_count={len(msgs)}", flush=True)
-                return msgs
-        except Exception as e:
-            print(f"[get_history] store read failed: {e}", flush=True)
-
-        # Fallback: read from checkpoint
         _, messages = await self._get_state(thread_id)
-        print(f"[get_history] thread={thread_id} checkpoint_count={len(messages)}", flush=True)
         result = []
         for msg in messages:
             if isinstance(msg, dict):
@@ -947,8 +1048,7 @@ class AsyncLangGraphSupervisor:
     ) -> Dict[str, Any]:
         """Update state at a checkpoint (conversation forking)."""
         self._ensure_initialized()
-        user_id, _ = await self._get_tracking_fields(thread_id)
-        config = _build_config(thread_id, checkpoint_id=checkpoint_id, user_id=user_id)
+        config = _build_config(thread_id, checkpoint_id=checkpoint_id)
         values = {}
         if new_messages:
             lc_messages = [

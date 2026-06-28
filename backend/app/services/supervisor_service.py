@@ -12,6 +12,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
+from app.memory import UserMemoryService
 from app.supervisor import AsyncLangGraphSupervisor
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,8 @@ class SupervisorService:
             timeout=settings.supervisor_timeout,
             databricks_host=_val(settings.databricks_host),
             result_volume_path=_val(settings.result_volume_path),
+            memory_extraction_enabled=settings.memory_extraction_enabled,
+            memory_extraction_model=settings.memory_extraction_model,
         )
         await client.__aenter__()
         await client.setup()
@@ -110,13 +113,17 @@ class SupervisorService:
         thread_id: str,
         question: str,
         *,
-        auto_approve_tools: bool = False,
+        auto_approve_tools: bool | None = None,
     ):
         """Stream a query through the supervisor client.
+
+        Defaults to settings.auto_approve_tools (env AUTO_APPROVE_TOOLS).
 
         Returns an object that can be iterated with ``async for``,
         yielding StreamEvent objects.
         """
+        if auto_approve_tools is None:
+            auto_approve_tools = settings.auto_approve_tools
         client = await self._get_client(endpoint_url)
         return await client.query_stream(
             thread_id=thread_id,
@@ -158,6 +165,29 @@ class SupervisorService:
         """Delete a thread from Lakebase (store + checkpoints)."""
         client = await self._get_client(endpoint_url)
         await client.delete_thread(thread_id)
+
+    async def update_thread_title(
+        self, endpoint_url: str, thread_id: str, title: str,
+    ) -> None:
+        """Update the title for a thread in DatabricksStore."""
+        client = await self._get_client(endpoint_url)
+        await client.update_thread_title(thread_id, title)
+
+    async def generate_thread_title(
+        self, endpoint_url: str, thread_id: str,
+    ) -> str:
+        """Auto-generate a title for a thread via LLM. Returns the new title."""
+        client = await self._get_client(endpoint_url)
+        return await client.generate_thread_title(thread_id)
+
+    async def get_memory_service(
+        self, endpoint_url: str,
+    ) -> UserMemoryService:
+        """Get a UserMemoryService backed by the store of the given endpoint."""
+        client = await self._get_client(endpoint_url)
+        if client._store is None:
+            raise RuntimeError("Store not initialized for endpoint: %s", endpoint_url)
+        return UserMemoryService(client._store)
 
 
 # Global singleton

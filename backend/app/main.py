@@ -1,16 +1,23 @@
 from contextlib import asynccontextmanager
 
+import mlflow
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.db.engine import close_engine
 from app.db.models import init_schema
-from app.routers import agents, ag_ui, sessions
+from app.routers import agents, ag_ui, memory, sessions
 from app.services.supervisor_service import supervisor_service
+
+load_dotenv()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.mlflow_tracking_uri:
+        mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     init_schema()
     await supervisor_service.start()
     yield
@@ -30,6 +37,7 @@ app.add_middleware(
 
 app.include_router(agents.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
+app.include_router(memory.router, prefix="/api")
 app.include_router(ag_ui.router, prefix="")
 
 

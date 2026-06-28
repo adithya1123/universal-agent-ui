@@ -46,7 +46,7 @@ export function Chat({
         agent.setMessages(
           data.messages.map((m) => ({
             id: crypto.randomUUID(),
-            role: m.role,
+            role: m.role as "user" | "assistant",
             content: m.content,
           }))
         );

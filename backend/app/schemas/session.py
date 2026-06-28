@@ -38,3 +38,11 @@ class ThreadMetadata(BaseModel):
     user_id: str | None = None
     correlation_id: str | None = None
     created_at: str | None = None
+
+
+class TitleUpdateRequest(BaseModel):
+    title: str
+
+
+class TitleResponse(BaseModel):
+    title: str

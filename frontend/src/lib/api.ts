@@ -16,8 +16,77 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status}`);
+  return res.json();
+}
+
 export async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`DELETE ${path} failed: ${res.status}`);
   return res.json();
+}
+
+export interface MemoryEntry {
+  key: string;
+  value?: string;
+  category?: string;
+}
+
+export async function listMemories(
+  agentId: string,
+  userId: string,
+): Promise<MemoryEntry[]> {
+  const params = new URLSearchParams({ agent_id: agentId, user_id: userId, limit: "100" });
+  // list_memories endpoint: GET /api/memory?agent_id=...&user_id=...
+  const data = await apiGet<Record<string, unknown>[]>(`/api/memory?${params}`);
+  return data.map((m) => ({
+    key: m.key as string,
+    value: (m.data as Record<string, unknown>)?.value as string ?? "",
+    category: (m.data as Record<string, unknown>)?.category as string ?? "",
+  }));
+}
+
+export async function saveMemory(
+  agentId: string,
+  userId: string,
+  key: string,
+  data: Record<string, string>,
+): Promise<void> {
+  await apiPost("/api/memory", { agent_id: agentId, user_id: userId, key, data });
+}
+
+export async function deleteMemory(
+  agentId: string,
+  userId: string,
+  key: string,
+): Promise<void> {
+  const params = new URLSearchParams({ agent_id: agentId, user_id: userId });
+  await apiDelete(`/api/memory/${encodeURIComponent(key)}?${params}`);
+}
+
+export async function autoTitleThread(
+  agentId: string,
+  threadId: string,
+): Promise<{ title: string }> {
+  return apiPost<{ title: string }>(
+    `/api/sessions/${encodeURIComponent(threadId)}/auto-title?agent_id=${agentId}`,
+    {},
+  );
+}
+
+export async function renameThread(
+  agentId: string,
+  threadId: string,
+  title: string,
+): Promise<void> {
+  await apiPatch(
+    `/api/sessions/${encodeURIComponent(threadId)}/title?agent_id=${agentId}`,
+    { title },
+  );
 }

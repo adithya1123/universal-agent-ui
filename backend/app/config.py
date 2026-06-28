@@ -20,7 +20,15 @@ class Settings(BaseSettings):
 
     max_history: int = 10
     supervisor_timeout: int = 300
+    auto_approve_tools: bool = True
 
+    memory_extraction_enabled: bool = True
+    memory_extraction_model: str = "deepseek-v4flash-chat"
+    memory_max_per_user: int = 100
+    memory_max_value_size: int = 4096
+    memory_injection_max: int = 10
+
+    mlflow_tracking_uri: str = "databricks"
     mlflow_experiment_id: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

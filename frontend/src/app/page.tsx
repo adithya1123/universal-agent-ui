@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Sidebar } from "@/components/sidebar";
 import { Chat } from "@/components/chat";
-import { apiGet, apiDelete } from "@/lib/api";
+import { apiGet, apiDelete, autoTitleThread, renameThread } from "@/lib/api";
 
 interface ChatSession {
   id: string;
@@ -76,6 +76,35 @@ export default function Home() {
     }
   }, [activeSessionId]);
 
+  const [generatingTitleId, setGeneratingTitleId] = useState<string | null>(null);
+
+  const handleAutoTitle = useCallback(async (threadId: string) => {
+    setGeneratingTitleId(threadId);
+    try {
+      const { title } = await autoTitleThread(DEFAULT_AGENT_ID, threadId);
+      setSessions((prev) =>
+        prev.map((s) => (s.id === threadId ? { ...s, title } : s)),
+      );
+    } catch (err) {
+      console.error("[page] auto-title failed:", err);
+    } finally {
+      setGeneratingTitleId(null);
+    }
+  }, []);
+
+  const handleRenameSession = useCallback(async (threadId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    try {
+      await renameThread(DEFAULT_AGENT_ID, threadId, trimmed);
+      setSessions((prev) =>
+        prev.map((s) => (s.id === threadId ? { ...s, title: trimmed } : s)),
+      );
+    } catch (err) {
+      console.error("[page] rename session failed:", err);
+    }
+  }, []);
+
   return (
     <ThemeProvider>
       <div className="flex h-dvh">
@@ -85,8 +114,13 @@ export default function Home() {
           onNewChat={handleNewChat}
           onSelectSession={handleSelectSession}
           onDeleteSession={handleDeleteSession}
+          onAutoTitle={handleAutoTitle}
+          onRenameSession={handleRenameSession}
+          generatingTitleId={generatingTitleId}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+          userId={userId}
+          agentId={DEFAULT_AGENT_ID}
         />
         <main className="flex-1 flex flex-col min-w-0">
           <Chat key={chatKey} agentId={DEFAULT_AGENT_ID} threadId={activeSessionId} userId={userId} onThreadCreated={fetchSessions} />

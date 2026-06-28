@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,8 @@ from app.schemas.session import (
     SessionListResponse,
     SessionSummary,
     ThreadMetadata,
+    TitleResponse,
+    TitleUpdateRequest,
 )
 from app.services.supervisor_service import supervisor_service
 
@@ -122,3 +124,34 @@ async def delete_session(
     endpoint_url = await _get_agent_endpoint(agent_id, session)
     await supervisor_service.delete_thread(endpoint_url, thread_id)
     return {"status": "deleted", "thread_id": thread_id}
+
+
+@router.post("/{thread_id}/auto-title")
+async def auto_title_session(
+    thread_id: str,
+    agent_id: str = Query(..., description="ID of the agent/supervisor"),
+    session: AsyncSession = Depends(get_session),
+) -> TitleResponse:
+    """Auto-generate a title for a thread using LLM (DeepSeek v4 Flash).
+
+    Loads conversation history from checkpoint, generates a 3-5 word title,
+    and persists it to DatabricksStore. Falls back to first user message
+    if LLM is unavailable.
+    """
+    endpoint_url = await _get_agent_endpoint(agent_id, session)
+    title = await supervisor_service.generate_thread_title(endpoint_url, thread_id)
+    return TitleResponse(title=title)
+
+
+@router.patch("/{thread_id}/title")
+async def update_session_title(
+    thread_id: str,
+    body: TitleUpdateRequest = Body(...),
+    agent_id: str = Query(..., description="ID of the agent/supervisor"),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Update the title for a thread with a custom title."""
+    endpoint_url = await _get_agent_endpoint(agent_id, session)
+    title = body.title.strip()[:100] if body.title else "Untitled"
+    await supervisor_service.update_thread_title(endpoint_url, thread_id, title)
+    return {"status": "updated", "title": title}

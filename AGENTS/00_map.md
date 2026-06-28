@@ -49,6 +49,7 @@
 | `RESULT_VOLUME_PATH` | `/Volumes/tpo_d/tpo_data_model/tpo_genai_session_results` | CSV extraction |
 | `MAX_HISTORY` | `10` | Sliding window size |
 | `SUPERVISOR_TIMEOUT` | `300` | Request timeout in seconds |
+| `AUTO_APPROVE_TOOLS` | `True` | Auto-approve MCP tool calls from the Supervisor (set `False` to require manual approval) |
 | `NEXT_PUBLIC_DEFAULT_AGENT_ID` | — | Frontend env — agent UUID for CopilotKit runtime |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Frontend env — backend base URL |
 | `BACKEND_URL` | `http://localhost:8000` | CopilotKit Runtime — backend URL for proxy |
