@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -34,6 +35,10 @@ _NS_USER_MEMORIES = ("user_memories",)
 
 def _sanitize(value: str) -> str:
     return value.replace(".", "-")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 EXTRACTION_PROMPT = """\
 You are a memory extraction system. Analyze the conversation below and extract \
@@ -135,25 +140,81 @@ class UserMemoryService:
             )
             return False
 
+        now = _now_iso()
+        existing = await self.get_memory(user_id, key)
+
+        if existing:
+            # Same-key merge
+            existing_value = existing.get("value", "") or ""
+            new_value = data.get("value", "") or ""
+
+            if new_value and new_value in existing_value:
+                return False  # no new information
+
+            merged = dict(existing)
+            if new_value:
+                merged["value"] = f"{existing_value}. {new_value}" if existing_value else new_value
+
+            if existing.get("category", "other") == "other" and data.get("category", "other") != "other":
+                merged["category"] = data["category"]
+
+            merged["updated_at"] = now
+            await self._store.aput(self._ns(user_id), key, merged)
+            logger.info("Updated memory key=%s for user=%s (merged)", key, user_id)
+            return True
+
+        # New memory
+        data["created_at"] = now
+        data["updated_at"] = now
+        data["access_count"] = 0
+
         current_count = await self.count_memories(user_id)
         if current_count >= self.MAX_PER_USER:
-            existing = await self.get_memory(user_id, key)
-            if existing is None:
-                logger.info(
-                    "Memory quota reached: %d/%d. Evicting oldest. user=%s",
-                    current_count, self.MAX_PER_USER, user_id,
-                )
-                oldest = await self._evict_oldest(user_id)
-                if not oldest:
-                    return False
-
-        existing_data = await self.get_memory(user_id, key)
-        if existing_data and existing_data.get("value") == data.get("value"):
-            return False
+            logger.info(
+                "Memory quota reached: %d/%d. Evicting least recently updated. user=%s",
+                current_count, self.MAX_PER_USER, user_id,
+            )
+            evicted = await self._evict_oldest(user_id)
+            if not evicted:
+                return False
 
         await self._store.aput(self._ns(user_id), key, data)
         logger.info("Saved memory key=%s for user=%s", key, user_id)
         return True
+
+    async def bump_access(self, user_id: str, key: str) -> None:
+        """Increment the access count for a memory (called after injection)."""
+        existing = await self.get_memory(user_id, key)
+        if existing and isinstance(existing, dict):
+            existing["access_count"] = existing.get("access_count", 0) + 1
+            existing["updated_at"] = _now_iso()
+            await self._store.aput(self._ns(user_id), key, existing)
+
+    async def list_memories_for_injection(
+        self, user_id: str, *, limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Return the top-N memories ranked by importance for injection.
+
+        Ranked by composite score: access_count (30%) + recency (70%).
+        """
+        items = await self.list_memories(user_id)
+        if not items:
+            return []
+
+        def _importance_score(m: Dict[str, Any]) -> float:
+            access = m.get("access_count", 0)
+            updated = m.get("updated_at", "")
+            try:
+                delta = datetime.now(timezone.utc) - datetime.fromisoformat(updated)
+                recency_days = delta.total_seconds() / 86400
+                recency_score = 1.0 / (1.0 + recency_days)
+            except (ValueError, TypeError):
+                recency_score = 0.5
+            access_score = min(access / 10.0, 1.0)
+            return access_score * 0.3 + recency_score * 0.7
+
+        items.sort(key=_importance_score, reverse=True)
+        return items[:limit]
 
     async def delete_memory(self, user_id: str, key: str) -> bool:
         existing = await self.get_memory(user_id, key)
@@ -172,14 +233,21 @@ class UserMemoryService:
         return count
 
     async def _evict_oldest(self, user_id: str) -> Optional[str]:
-        """Remove the oldest memory (by key sort) to free quota."""
-        items = await self._store.asearch(self._ns(user_id), query="", limit=1)
-        if items:
-            oldest_key = items[0].key
-            await self._store.adelete(self._ns(user_id), oldest_key)
-            logger.info("Evicted memory key=%s for user=%s", oldest_key, user_id)
-            return oldest_key
-        return None
+        """Remove the least recently updated memory to free quota."""
+        items = await self._store.asearch(self._ns(user_id), query="", limit=self.MAX_PER_USER)
+        if not items or len(items) < self.MAX_PER_USER:
+            # Under quota — shouldn't be called, but safe no-op
+            return None
+
+        def _updated_ts(item: Any) -> str:
+            val = item.value or {}
+            return val.get("updated_at", "") or ""
+
+        items.sort(key=_updated_ts)
+        oldest = items[0]
+        await self._store.adelete(self._ns(user_id), oldest.key)
+        logger.info("Evicted memory key=%s for user=%s", oldest.key, user_id)
+        return oldest.key
 
     def format_for_context(self, memories: List[Dict[str, Any]], max_items: int = 10) -> str:
         """Format memories into a context block for agent injection.

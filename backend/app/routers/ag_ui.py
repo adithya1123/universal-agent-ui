@@ -2,16 +2,20 @@
 
 Expects POST /ag-ui/run with:
     messages: list[{"role": "user", "content": "..."}]
-    threadId: str | null (null = new conversation)
-    agentId: str | null (identifies which registered agent/supervisor to use)
-    userId: str | null
+    thread_id: str | null (null = new conversation)
+    agent_id: str | null (identifies which registered agent/supervisor to use)
+    user_id: str | null
 
-Returns a text/event-stream that CopilotKit Runtime consumes directly,
-wrapping each text chunk into AG-UI TEXT_MESSAGE_CHUNK events.
+Returns a text/event-stream with JSON SSE events:
+    {"type": "text", "content": "..."}      — text delta from the agent
+    {"type": "routing", "agent": "..."}     — supervisor dispatching to a sub-agent
+    {"type": "reasoning", "content": "..."} — intermediate thinking/reasoning
+    data: [DONE]                            — stream complete
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import AsyncGenerator
 
@@ -43,7 +47,7 @@ async def _stream_agent_response(
     thread_id: str,
     question: str,
 ) -> AsyncGenerator[bytes, None]:
-    """Stream supervisor agent response as SSE byte chunks."""
+    """Stream supervisor agent response as JSON SSE events."""
     stream = await supervisor_service.query_stream(
         endpoint_url=endpoint_url,
         thread_id=thread_id,
@@ -52,11 +56,18 @@ async def _stream_agent_response(
 
     async for event in stream:
         if event.type == "text_delta":
-            yield event.text.encode("utf-8")
+            payload = json.dumps({"type": "text", "content": event.text})
+            yield f"data: {payload}\n\n".encode()
+        elif event.type == "routing":
+            payload = json.dumps({"type": "routing", "agent": event.agent})
+            yield f"data: {payload}\n\n".encode()
+        elif event.type == "reasoning":
+            payload = json.dumps({"type": "reasoning", "content": event.text})
+            yield f"data: {payload}\n\n".encode()
         elif event.type == "completed":
-            # Don't break — let the generator continue so
-            # _PersistingStreamWrapper can persist messages after the stream.
             pass
+
+    yield b"data: [DONE]\n\n"
 
 
 @router.post("/ag-ui/run")

@@ -32,6 +32,7 @@
 | AG-UI streaming | `backend/app/routers/ag_ui.py` | — |
 | Session management | `backend/app/routers/sessions.py` | → `contracts/sessions.md` |
 | User memory | `backend/app/memory.py` | → `contracts/memory.md` |
+| Register agent dialog | `frontend/src/components/register-agent-dialog.tsx` | — |
 | Database | `backend/app/db/` | — |
 | Auth | `backend/app/auth.py` | → `contracts/auth.md` (legacy) |
 | Message store | `backend/app/supervisor/streaming.py` | → `contracts/streaming.md` |
@@ -71,4 +72,4 @@ cd frontend && pnpm lint
 cd backend && uv run python -c "from app.main import app; print('OK')"
 ```
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-06-28_

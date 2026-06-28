@@ -31,6 +31,17 @@ Bridges the CopilotKit Runtime (Next.js) to the supervisor service. Accepts POST
 
 **What it does NOT handle**: Authentication, user management, agent registration, session title generation. It trusts the CopilotKit Runtime to pass the correct agentId.
 
+**Key evolution — JSON SSE events**: The endpoint originally yielded raw text bytes from
+`text_delta` events, dropping `routing` and `reasoning` events entirely. It now encodes ALL
+event types as JSON SSE lines:
+- `{"type":"text","content":"..."}` — text delta (same as before, now JSON-wrapped)
+- `{"type":"routing","agent":"..."}` — sub-agent dispatch notice
+- `{"type":"reasoning","content":"..."}` — intermediate thinking/reasoning text
+
+The CopilotKit Runtime (`route.ts`) parses these JSON events, forwarding text to `TEXT_MESSAGE_CHUNK`
+and routing/reasoning to the UI for display. Reasoning text appears in the smart status bar as
+live-updating "Thinking: ..." text. Routing events appear as inline italic notices in the message.
+
 ## `frontend/src/app/api/copilotkit/route.ts` — CopilotKit Runtime
 
 Next.js API route that creates a `CopilotRuntime` with a custom `BuiltInAgent` in **single-route mode** (`mode: "single-route"`). The custom agent factory POSTs to the backend `/ag-ui/run` and wraps the response bytes into AG-UI `TEXT_MESSAGE_CHUNK` events.
@@ -43,6 +54,16 @@ Next.js API route that creates a `CopilotRuntime` with a custom `BuiltInAgent` i
 
 **What it does NOT handle**: Session persistence, agent communication. It is purely a proxy.
 
+**SSE parser added**: The factory now includes a line-buffered SSE parser that splits incoming
+bytes on `\n\n` boundaries into complete events. It processes three event types:
+- `text` → `TEXT_MESSAGE_CHUNK` (rendered as message content)
+- `routing` → `TEXT_MESSAGE_CHUNK` with `\n\n*→ agent name*\n\n` formatting (renders as italic)
+- `reasoning` → `TEXT_MESSAGE_CHUNK` with `[REASONING]` prefix (stripped by Messages component,
+  shown in the smart status bar instead)
+
+The SSE parser handles partial chunk boundaries where a single `reader.read()` may split a
+JSON event across multiple bytes. Incomplete events are buffered until the next chunk.
+
 ## `frontend/src/components/` — React UI Components
 
 Seven client components that make up the chat interface: Chat, ChatHeader, Messages, Message, MultimodalInput, Sidebar, ThemeProvider.
@@ -51,10 +72,18 @@ Seven client components that make up the chat interface: Chat, ChatHeader, Messa
 
 **What it does NOT handle**: Agent logic. All components are presentational and delegate to CopilotKit's `useAgent` hook.
 
-**Recent additions**: The Sidebar component now supports two new interactions:
-- **Sparkle icon** (✨, shown on hover) — triggers auto-title generation via `onAutoTitle` callback. Shows a spinning `Loader2` icon during generation.
-- **Inline title editing** — double-click or click the ✏️ pencil icon to enter edit mode with an `<input>`. Enter saves (calls `onRenameSession`), Escape cancels, blur commits.
-- **Edit state management**: `editingId` state tracks which session is being edited, `editInputRef` auto-focuses the input on mount. The edit is committed on blur (mouse leave).
+**Features**:
+- **Agent selector** — Header shows active agent name with `Bot` icon. Click opens a dropdown
+  of all registered agents (fetched from `GET /api/agents`). Select to switch; Chat remounts
+  and sessions refetch for the new agent. "Register new agent" button opens a modal dialog.
+- **Session list** — Shows all sessions for the active agent. Hover reveals sparkle icon (auto-title),
+  pencil icon (inline rename), and delete button. Double-click title or click pencil to edit inline.
+- **Messages component** — Shows a smart status bar while streaming: a spinning `Loader2` icon +
+  the latest reasoning text from the agent (extracted from `[REASONING]` markers). Falls back
+  to "Agent is responding..." when no reasoning is flowing. Reasoning markers are stripped
+  from displayed message content so they only appear in the status bar.
+- **MultimodalInput** — Textarea auto-resizes from 1 row up to 200px using a `useRef` +
+  `useEffect` that sets `height` to `min(scrollHeight, 200px)` on input change.
 
 ## `backend/app/memory.py` — Memory Extraction &amp; CRUD
 
@@ -67,9 +96,18 @@ separates storage concerns (UserMemoryService) from LLM querying (MemoryExtracto
 so the extraction model can be swapped independently of storage.
 
 **UserMemoryService**: Manages user memories in the DatabricksStore under namespace
-`("user_memories", <sanitized_user_id>)`. Features LRU eviction (oldest key by sort)
-when `memory_max_per_user` is reached, value size checks (`memory_max_value_size = 4096`),
-and `format_for_context()` for structured injection.
+`("user_memories", <sanitized_user_id>)`. Features:
+- **Same-key merge**: If a new fact uses a key that already exists, its value is appended
+  to the existing value (e.g., "Python. Also Rust for systems work"). The category is only
+  upgraded from "other" to a specific one if the new fact has one.
+- **Timestamps + access tracking**: Every memory stores `created_at`, `updated_at` (ISO
+  timestamps), and `access_count` (incremented on each injection via `bump_access()`).
+- **Ranked injection**: `list_memories_for_injection()` returns top-N memories by composite
+  importance score (access_count × 0.3 + recency × 0.7).
+- **Fixed eviction**: `_evict_oldest()` now reads all memories and evicts the one with the
+  oldest `updated_at` (was: first result from `asearch` with no sort).
+- Value size checks (`memory_max_value_size = 4096`), and `format_for_context()` for
+  structured injection.
 
 **MemoryExtractor**: Calls a Databricks serving endpoint (default: `deepseek-v4flash-chat`)
 with a structured extraction prompt that instructs the LLM to return a JSON array of facts.
@@ -104,4 +142,4 @@ simpler prompt and `max_tokens=60`.
 - MLflow trace tagging failure → logged at WARNING, non-critical
 - CSV volume write failure → logged at WARNING, non-critical
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-06-28_

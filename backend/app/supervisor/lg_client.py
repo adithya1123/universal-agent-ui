@@ -577,7 +577,9 @@ class AsyncLangGraphSupervisor:
             return input_messages
         try:
             ms = UserMemoryService(self._store)
-            memories = await ms.list_memories(user_id, limit=settings.memory_injection_max)
+            memories = await ms.list_memories_for_injection(
+                user_id, limit=settings.memory_injection_max,
+            )
         except Exception as e:
             logger.debug("Memory injection skipped: %s", e)
             return input_messages
@@ -593,6 +595,14 @@ class AsyncLangGraphSupervisor:
                 "role": "user",
                 "content": context_text,
             })
+
+        # Bump access counts for injected memories (fire-and-forget)
+        for mem in memories:
+            try:
+                await ms.bump_access(user_id, mem.get("key", ""))
+            except Exception:
+                logger.debug("Failed to bump access for memory key=%s", mem.get("key"))
+
         logger.info(
             "Injected %d memories for user=%s into query context",
             len(memories), user_id,

@@ -55,6 +55,9 @@ CopilotKit Runtime (single-route) → POST /ag-ui/run → SupervisorService (cli
 | Frontend delete didn't call API | `handleDeleteSession` only removed local state | `apiDelete()` to `DELETE /api/sessions/{thread_id}` |
 | Title generation fails | SP lacks `Can Query` on `deepseek-v4flash-chat` endpoint | `PermissionError` handled, falls back to first user message; log tells you which endpoint needs permission |
 | Auto-title not working | User didn't click sparkle icon | Auto-title is manual (click sparkle), not automatic — preserves existing first-turn fallback |
+| No streaming status while agent processing | Non-text events dropped, AwaitingResponse only before first text | JSON SSE events with routing/reasoning + persistent smart status bar |
+| Memory duplicates on re-save | save_memory overwrote or rejected same-key facts | Same-key merge (appends new info) + timestamps + importance ranking |
+| Agent selection hardcoded | DEFAULT_AGENT_ID from env only, no UI | Agent selector dropdown + registration modal with endpoint URL |
 
 ## Delete thread — data cleaned from Lakebase
 
@@ -67,4 +70,4 @@ CopilotKit Runtime (single-route) → POST /ag-ui/run → SupervisorService (cli
 | DatabricksStore | `("messages", <thread_id>)` | each `message_id` (per-turn tracking) |
 | CheckpointSaver | thread-scoped | `adelete_thread(thread_id)` (state) |
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-06-28_

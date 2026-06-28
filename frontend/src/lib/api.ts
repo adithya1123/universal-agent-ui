@@ -36,6 +36,8 @@ export interface MemoryEntry {
   key: string;
   value?: string;
   category?: string;
+  updated_at?: string;
+  access_count?: number;
 }
 
 export async function listMemories(
@@ -49,6 +51,8 @@ export async function listMemories(
     key: m.key as string,
     value: (m.value as string) ?? "",
     category: (m.category as string) ?? "",
+    updated_at: (m.updated_at as string) ?? undefined,
+    access_count: (m.access_count as number) ?? 0,
   }));
 }
 

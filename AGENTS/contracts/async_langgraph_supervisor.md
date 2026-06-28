@@ -101,4 +101,4 @@ AsyncLangGraphSupervisor(
 - **Failure mode**: Connection/HTTP errors propagate up to `query_stream()` which catches them and returns `AsyncStreamingResponse._from_error()`
 - **Why direct HTTP instead of `databricks-openai`**: `AsyncDatabricksOpenAI.responses.create(stream=True)` routes to `{base_url}/v1/responses` which the Databricks serving endpoint doesn't support, returning an empty stream. Direct SSE to `/invocations` works correctly.
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-06-28_

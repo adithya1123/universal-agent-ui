@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Plus,
   Trash2,
@@ -15,6 +15,22 @@ import {
   deleteMemory,
   MemoryEntry,
 } from "@/lib/api";
+
+function formatRelativeTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const then = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - then.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "Just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDays = Math.floor(diffHr / 24);
+  if (diffDays < 30) return `${diffDays}d ago`;
+  const diffMonths = Math.floor(diffDays / 30);
+  return `${diffMonths}mo ago`;
+}
 
 const CATEGORY_COLORS: Record<string, string> = {
   preference: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
@@ -39,6 +55,14 @@ export function MemoryPanel({
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [newCategory, setNewCategory] = useState("preference");
+
+  const sortedMemories = useMemo(() => {
+    return [...memories].sort((a, b) => {
+      const aScore = (a.access_count ?? 0) * 0.3;
+      const bScore = (b.access_count ?? 0) * 0.3;
+      return bScore - aScore;
+    });
+  }, [memories]);
 
   const fetchMemories = useCallback(async () => {
     if (!agentId || !userId) return;
@@ -182,7 +206,7 @@ export function MemoryPanel({
             </button>
           </p>
         )}
-        {memories.map((mem) => (
+        {sortedMemories.map((mem) => (
           <div
             key={mem.key}
             className="group relative p-2.5 rounded-md text-xs bg-sidebar-accent/30 hover:bg-sidebar-accent/50 transition-colors"
@@ -208,6 +232,11 @@ export function MemoryPanel({
                 <p className="text-sidebar-foreground/70 leading-relaxed line-clamp-3">
                   {mem.value}
                 </p>
+                {mem.updated_at && (
+                  <p className="text-[10px] text-sidebar-foreground/40 mt-1">
+                    Updated {formatRelativeTime(mem.updated_at)}
+                  </p>
+                )}
               </div>
               <button
                 onClick={() => handleDelete(mem.key)}

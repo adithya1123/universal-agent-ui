@@ -95,6 +95,25 @@ Message history is stored in the DatabricksStore's `threads` namespace under the
 
 The CopilotKit Runtime runs in **single-route mode** (`mode: "single-route"`), where all operations (info, run, connect, stop, threads) go through a single `POST /api/copilotkit` endpoint instead of separate subpaths.
 
+## Memory Importance Score
+
+When selecting top-N memories for injection into the agent context, `UserMemoryService.list_memories_for_injection()` ranks all memories by a composite score:
+
+```
+importance = (min(access_count / 10, 1.0) × 0.3) + (recency_score × 0.7)
+```
+
+Where:
+- `access_count` = number of times this memory has been injected into a query (persisted)
+- `recency_score = 1 / (1 + days_since_updated)` — decays from 1.0 (updated just now) toward 0
+
+**Behavior**:
+- Frequently accessed memories (high `access_count`) get priority — memories the user consistently needs are promoted
+- Recently updated memories get priority — newly extracted or merged facts surface immediately
+- At most `memory_injection_max` (default 10) memories are injected per query
+- After injection, each memory's `access_count` is incremented via `bump_access()` (fire-and-forget)
+- Memories with no timestamps (legacy data) get `recency_score = 0.5`
+
 **Why:** Multi-route mode requires a `[...path]` catch-all route and both GET+POST exports. Single-route mode simplifies the Next.js route to a single file at `api/copilotkit/route.ts` with only `POST` export. The CopilotKit frontend provider must set `useSingleEndpoint` to match.
 
 **ForwardedProps flow:**
@@ -118,4 +137,4 @@ The CopilotKit Runtime runs in **single-route mode** (`mode: "single-route"`), w
 5. Sent as `agent_id` in JSON body to `/ag-ui/run`
 6. Backend looks up agent by ID in SQLite registry to get the endpoint URL
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-06-28_

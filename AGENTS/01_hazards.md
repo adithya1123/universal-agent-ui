@@ -56,6 +56,21 @@
     triggered by the user clicking the sparkle icon. The existing first-turn fallback
     behavior is preserved to avoid an extra LLM call on every single conversation.
 
+13. **SSE event format changed to JSON** — `ag_ui.py` now sends structured JSON SSE events
+    (`{"type":"text","content":"..."}`, `{"type":"routing","agent":"..."}`,
+    `{"type":"reasoning","content":"..."}`) instead of raw bytes. The `route.ts` SSE parser
+    must match this format. If events are malformed, the CopilotKit runtime silently drops them.
+    Always verify both sides when changing the SSE protocol.
+
+14. **Memory persisted per-agent** — `page.tsx` now manages agent selection via `activeAgentId`
+    state. Sessions, memories, and title operations are all scoped to the active agent. Switching
+    agents remounts the Chat component and refetches sessions for the new agent.
+
+15. **Memory save now merges by key** — `UserMemoryService.save_memory()` appends new value
+    content to existing memory when the same key is saved again (was: overwrite or reject).
+    Existing value is preserved; new information is appended with ". " separator. If the new
+    value is already contained in the existing value, the save is a no-op (returns False).
+
 ## ⚪ CONVENTION
 
 1. **Three-router pattern** — Backend routes are split into `agents.py` (CRUD), `ag_ui.py` (streaming), and `sessions.py` (thread management). New routes should follow this split: agent lifecycle → `agents`, agent communication → `ag_ui`, thread/session queries → `sessions`.
@@ -64,4 +79,4 @@
 
 3. **Supervisor client is a lazy singleton pool** — `SupervisorService._get_client()` creates clients on first use per endpoint URL. Always get a client through the service, never instantiate `AsyncLangGraphSupervisor` directly outside of the service.
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-06-28_
