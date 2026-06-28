@@ -69,12 +69,21 @@ export function Chat({
   const handleSend = async (text: string) => {
     const isNew = isNewChat.current;
     agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
-    await copilotkit.runAgent({
-      agent,
-      forwardedProps: { userId, agentId },
-    });
-    if (isNew && onThreadCreated) {
-      onThreadCreated();
+    try {
+      await copilotkit.runAgent({
+        agent,
+        forwardedProps: { userId, agentId },
+      });
+      if (isNew && onThreadCreated) {
+        onThreadCreated();
+      }
+    } catch (err) {
+      console.error("[chat] agent run failed:", err);
+      agent.addMessage({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "Sorry, something went wrong. The backend may be unavailable. Please try again.",
+      });
     }
   };
 

@@ -6,6 +6,7 @@ import {
   MessageSquarePlus,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Moon,
   Sun,
   Trash2,
@@ -14,9 +15,13 @@ import {
   Sparkles,
   Loader2,
   Pencil,
+  Bot,
+  Plus,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MemoryPanel } from "./memory-panel";
+import type { AgentSummary } from "@/lib/api";
 
 interface ChatSession {
   id: string;
@@ -39,6 +44,10 @@ export function Sidebar({
   onToggleCollapse,
   userId,
   agentId,
+  agents,
+  activeAgentId,
+  onSelectAgent,
+  onOpenRegisterAgent,
 }: {
   sessions: ChatSession[];
   activeSessionId?: string;
@@ -52,6 +61,10 @@ export function Sidebar({
   onToggleCollapse: () => void;
   userId: string;
   agentId: string;
+  agents: AgentSummary[];
+  activeAgentId: string;
+  onSelectAgent: (id: string) => void;
+  onOpenRegisterAgent: () => void;
 }) {
   const { theme, setTheme } = useTheme();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -60,6 +73,8 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const editInputRef = useRef<HTMLInputElement>(null);
+  const [showAgentDropdown, setShowAgentDropdown] = useState(false);
+  const agentDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (editingId && editInputRef.current) {
@@ -69,6 +84,19 @@ export function Sidebar({
   }, [editingId]);
   useEffect(() => setMounted(true), []);
 
+  useEffect(() => {
+    if (!showAgentDropdown) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (agentDropdownRef.current && !agentDropdownRef.current.contains(e.target as Node)) {
+        setShowAgentDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showAgentDropdown]);
+
+  const currentAgent = agents.find((a) => a.id === activeAgentId);
+
   return (
     <div
       className={cn(
@@ -76,16 +104,59 @@ export function Sidebar({
         collapsed ? "w-[52px]" : "w-[260px]",
       )}
     >
-      {/* Header */}
-      <div className="flex items-center h-11 px-3 border-b border-sidebar-border">
+      {/* Header with agent selector */}
+      <div className="flex items-center h-11 px-3 border-b border-sidebar-border gap-1">
         {!collapsed && (
-          <span className="text-base font-semibold text-sidebar-foreground flex-1">
-            Agent UI
-          </span>
+          <div ref={agentDropdownRef} className="relative flex-1 min-w-0">
+            <button
+              onClick={() => setShowAgentDropdown(!showAgentDropdown)}
+              className="flex items-center gap-1.5 w-full text-left text-sm font-semibold text-sidebar-foreground hover:text-blue-500 transition-colors truncate pr-1"
+            >
+              <Bot className="size-4 shrink-0" />
+              <span className="truncate flex-1">{currentAgent?.name || agentId || "Select agent"}</span>
+              <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", showAgentDropdown && "rotate-180")} />
+            </button>
+            {showAgentDropdown && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-sidebar border border-sidebar-border rounded-md shadow-xl z-50 py-1 max-h-60 overflow-y-auto">
+                {agents.length === 0 && (
+                  <p className="px-3 py-2 text-xs text-sidebar-foreground/50">No agents registered</p>
+                )}
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => {
+                      onSelectAgent(a.id);
+                      setShowAgentDropdown(false);
+                    }}
+                    className={cn(
+                      "flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm transition-colors",
+                      a.id === activeAgentId
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/60",
+                    )}
+                  >
+                    <span className="truncate flex-1">{a.name}</span>
+                    {a.id === activeAgentId && <Check className="size-3.5 shrink-0 text-blue-500" />}
+                  </button>
+                ))}
+                <div className="border-t border-sidebar-border my-1" />
+                <button
+                  onClick={() => {
+                    setShowAgentDropdown(false);
+                    onOpenRegisterAgent();
+                  }}
+                  className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-blue-500 hover:bg-sidebar-accent/60 transition-colors"
+                >
+                  <Plus className="size-3.5 shrink-0" />
+                  <span>Register new agent</span>
+                </button>
+              </div>
+            )}
+          </div>
         )}
         <button
           onClick={onToggleCollapse}
-          className="p-1 rounded hover:bg-sidebar-accent text-sidebar-foreground/60 hover:text-sidebar-foreground"
+          className="p-1 rounded hover:bg-sidebar-accent text-sidebar-foreground/60 hover:text-sidebar-foreground shrink-0"
         >
           {collapsed ? (
             <ChevronRight className="size-4" />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type KeyboardEvent, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, type KeyboardEvent, type ChangeEvent } from "react";
 import { ArrowUp, Square, Paperclip } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,14 @@ export function MultimodalInput({
   placeholder?: string;
 }) {
   const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "0";
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  }, [input]);
 
   const handleSend = () => {
     const text = input.trim();
@@ -43,11 +51,11 @@ export function MultimodalInput({
             <Paperclip className="size-4" />
           </button>
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             placeholder={placeholder || "Type a message..."}
-            rows={1}
             className="flex-1 bg-transparent resize-none outline-none text-sm py-1.5 max-h-[200px] placeholder:text-muted-foreground"
             style={{ minHeight: "44px" }}
           />

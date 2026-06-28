@@ -293,6 +293,7 @@ class AsyncLangGraphSupervisor:
         self._store: Optional[AsyncDatabricksStore] = None
         self._graph: Optional[Any] = None
         self._memory_extractor: Optional[MemoryExtractor] = None
+        self._memory_extraction_disabled: List[bool] = [False]
         self._exit_stack: Optional[AsyncExitStack] = None
 
         logger.info(
@@ -700,6 +701,8 @@ class AsyncLangGraphSupervisor:
         else:
             raw_stream = AsyncStreamingResponse(stream, question, start, store_raw)
 
+        memory_extractor = None if self._memory_extraction_disabled[0] else self._memory_extractor
+
         return _PersistingStreamWrapper(
             raw_stream, self._graph, self._store, config, messages,
             thread_id, message_id,
@@ -708,8 +711,9 @@ class AsyncLangGraphSupervisor:
             result_volume=self._result_volume,
             title=title,
             volume_writer=self._volume_writer,
-            memory_extractor=self._memory_extractor,
-            user_memory_service=UserMemoryService(self._store) if self._memory_extractor else None,
+            memory_extractor=memory_extractor,
+            user_memory_service=UserMemoryService(self._store) if memory_extractor else None,
+            extraction_disabled_ref=self._memory_extraction_disabled,
         )
 
     # -- Async blocking query (convenience) ----------------------------------

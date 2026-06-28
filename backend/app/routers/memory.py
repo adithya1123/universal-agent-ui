@@ -84,7 +84,12 @@ async def save_memory(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     ms = await _get_memory_service(req.agent_id, session)
-    await ms.save_memory(req.user_id, req.key, req.data)
+    ok = await ms.save_memory(req.user_id, req.key, req.data)
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to save memory (duplicate, value too large, or quota full)",
+        )
     return {"status": "saved", "key": req.key, "user_id": req.user_id}
 
 

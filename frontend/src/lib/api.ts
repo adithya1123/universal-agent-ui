@@ -70,6 +70,33 @@ export async function deleteMemory(
   await apiDelete(`/api/memory/${encodeURIComponent(key)}?${params}`);
 }
 
+export interface AgentSummary {
+  id: string;
+  name: string;
+  endpoint_url: string;
+  endpoint_type: string;
+  description: string;
+  created_at: string;
+}
+
+export async function listAgents(): Promise<AgentSummary[]> {
+  return apiGet<AgentSummary[]>("/api/agents");
+}
+
+export async function registerAgent(
+  name: string,
+  endpointUrl: string,
+  endpointType: string,
+  description?: string,
+): Promise<AgentSummary> {
+  return apiPost<AgentSummary>("/api/agents", {
+    name,
+    endpoint_url: endpointUrl,
+    endpoint_type: endpointType || "supervisor",
+    description: description || "",
+  });
+}
+
 export async function autoTitleThread(
   agentId: string,
   threadId: string,

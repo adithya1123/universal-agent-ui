@@ -468,6 +468,7 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
         volume_writer: Optional[VolumeWriter] = None,
         memory_extractor: Optional[MemoryExtractor] = None,
         user_memory_service: Optional[UserMemoryService] = None,
+        extraction_disabled_ref: Optional[List[bool]] = None,
     ) -> None:
         self._inner = inner
         self._result: Optional[AgentResult] = None
@@ -486,6 +487,7 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
         self._volume_writer = volume_writer
         self._memory_extractor = memory_extractor
         self._user_memory_service = user_memory_service
+        self._extraction_disabled_ref = extraction_disabled_ref
 
     @property
     def _question(self) -> str:
@@ -633,13 +635,14 @@ class _PersistingStreamWrapper(AsyncStreamingResponse):
                         saved, self._user_id,
                     )
             except PermissionError:
-                logger.error(
-                    "Memory extraction permanently disabled for endpoint. "
-                    "Grant 'Can Query' permission to the App Service Principal "
-                    "on the serving endpoint, or set MEMORY_EXTRACTION_ENABLED=False "
-                    "in .env to silence this message."
+                logger.warning(
+                    "Memory extraction disabled: App Service Principal lacks "
+                    "'Can Query' on serving endpoint '%s'. Skipping extraction.",
+                    self._thread_id,
                 )
                 self._memory_extractor = None
+                if self._extraction_disabled_ref is not None:
+                    self._extraction_disabled_ref[0] = True
             except Exception as e:
                 logger.warning("Memory extraction failed for thread %s: %s", self._thread_id, e)
 
